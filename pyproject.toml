@@ -1,0 +1,66 @@
+[project]
+name = "auto-scroll"
+authors = [
+    {name = "Adam Pirog", email = "pirog.adam@gmail.com"},
+]
+description = "Hands-free scrolling for long content."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+dynamic = ["version"]
+requires-python = ">=3.13"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "ruff",
+    "pytest>=9"
+]
+
+[project.urls]
+homepage = "https://github.com/adampirog/auto-scroll"
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["auto_scroll*"]
+namespaces = false
+
+[tool.setuptools.dynamic]
+version = {attr = "auto_scroll.version.__version__"}
+
+[tool.pytest]
+minversion = "9.0"
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+extend-select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "A",    # flake8-builtins
+    "N",    # pep8-naming
+    "C90",  # mccabe complexity
+    "UP",   # pyupgrade
+    "C4",   # flake8-comprehensions
+    "RUF",  # ruff-specific rules
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.isort]
+lines-after-imports = 2
