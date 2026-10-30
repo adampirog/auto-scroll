@@ -9,7 +9,9 @@ license = "MIT"
 license-files = ["LICENSE"]
 dynamic = ["version"]
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "flet>=1.0,<2",
+]
 
 [dependency-groups]
 dev = [
@@ -64,3 +66,14 @@ max-complexity = 10
 
 [tool.ruff.lint.isort]
 lines-after-imports = 2
+
+[tool.flet]
+product = "Auto Scroll"
+org = "com.adampirog"
+bundle_id = "com.adampirog.autoscroll"
+build_number = 1
+
+[tool.flet.app]
+path = "."
+module = "main"
+exclude=["tests"]
