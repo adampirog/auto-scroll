@@ -9,6 +9,7 @@ import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
+import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -17,13 +18,10 @@ import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
-import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-/**
- * Floating Accessibility overlay with draggable controls.
- */
+/** Native draggable Accessibility overlay. */
 internal class AutoScrollOverlay(
     private val service: AutoScrollAccessibilityService,
     private val onToggle: () -> Unit,
@@ -32,6 +30,7 @@ internal class AutoScrollOverlay(
     private val onSpeed: (Double) -> Unit
 ) {
     companion object {
+        private const val TAG = "AutoScrollOverlay"
         private const val COLLAPSED_DP = 116
         private const val EXPANDED_DP = 276
 
@@ -41,9 +40,6 @@ internal class AutoScrollOverlay(
         private val PALE = Color.rgb(233, 247, 251)
         private val SURFACE = Color.rgb(243, 247, 250)
         private val BORDER = Color.rgb(222, 231, 237)
-
-        private const val MIN_SPEED = 1
-        private const val MAX_SPEED = 25
     }
 
     private val windowManager = service.getSystemService(
@@ -52,7 +48,6 @@ internal class AutoScrollOverlay(
 
     private var root: DragPanel? = null
     private var params: WindowManager.LayoutParams? = null
-
     private var expanded = false
 
     private var playButton: GlyphView? = null
@@ -64,16 +59,10 @@ internal class AutoScrollOverlay(
     private var speedSlider: SeekBar? = null
     private var speedLabel: TextView? = null
 
-    fun show(
-        direction: String,
-        speed: Double,
-        playing: Boolean
-    ) {
+    fun show(direction: String, speed: Double, playing: Boolean) {
         if (root != null) return
 
-        val screenWidth =
-            service.resources.displayMetrics.widthPixels
-
+        val screen = service.resources.displayMetrics
         val collapsedWidth = dp(COLLAPSED_DP)
 
         val layout = WindowManager.LayoutParams(
@@ -85,11 +74,8 @@ internal class AutoScrollOverlay(
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.LEFT
-
-            x = (
-                screenWidth - collapsedWidth - dp(16)
-            ).coerceAtLeast(0)
-
+            x = (screen.widthPixels - collapsedWidth - dp(16))
+                .coerceAtLeast(0)
             y = dp(120)
         }
 
@@ -101,21 +87,22 @@ internal class AutoScrollOverlay(
         }
 
         panel.onDrag = { dx, dy ->
-            val screen = service.resources.displayMetrics
+            val bounds = service.resources.displayMetrics
 
             layout.x = (layout.x + dx.roundToInt()).coerceIn(
                 0,
-                (screen.widthPixels - panel.width).coerceAtLeast(0)
+                (bounds.widthPixels - panel.width).coerceAtLeast(0)
             )
 
             layout.y = (layout.y + dy.roundToInt()).coerceIn(
                 0,
-                (screen.heightPixels - panel.height).coerceAtLeast(0)
+                (bounds.heightPixels - panel.height).coerceAtLeast(0)
             )
 
-            windowManager.updateViewLayout(panel, layout)
+            updatePanel(panel, layout)
         }
 
+        // Expanded heading
         val heading = LinearLayout(service).apply {
             gravity = Gravity.CENTER_VERTICAL
             visibility = View.GONE
@@ -136,6 +123,7 @@ internal class AutoScrollOverlay(
 
         titleRow = heading
 
+        // Compact controls
         val controls = LinearLayout(service).apply {
             gravity = Gravity.CENTER_VERTICAL
         }
@@ -151,7 +139,6 @@ internal class AutoScrollOverlay(
         }
 
         controls.addView(playButton)
-
         controls.addView(
             View(service),
             LinearLayout.LayoutParams(0, 1, 1f)
@@ -169,6 +156,7 @@ internal class AutoScrollOverlay(
 
         controls.addView(expandButton)
 
+        // Expanded controls
         val advanced = LinearLayout(service).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
@@ -184,8 +172,8 @@ internal class AutoScrollOverlay(
             setPadding(dp(4), dp(4), dp(4), dp(4))
         }
 
-        upButton = directionButton("↑  Up", "up")
-        downButton = directionButton("↓  Down", "down")
+        upButton = directionButton("↑  Up", ScrollRules.UP)
+        downButton = directionButton("↓  Down", ScrollRules.DOWN)
 
         directions.addView(
             upButton,
@@ -199,10 +187,7 @@ internal class AutoScrollOverlay(
 
         advanced.addView(
             directions,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
+            LinearLayout.LayoutParams(-1, -2).apply {
                 topMargin = dp(8)
                 bottomMargin = dp(16)
             }
@@ -217,18 +202,14 @@ internal class AutoScrollOverlay(
             LinearLayout.LayoutParams(0, dp(28), 1f)
         )
 
-        speedLabel = text(
-            "1×",
-            15f,
-            TEAL,
-            bold = true
-        )
-
+        speedLabel = text("1×", 15f, TEAL, bold = true)
         speedHeading.addView(speedLabel)
         advanced.addView(speedHeading)
 
         speedSlider = SeekBar(service).apply {
-            max = MAX_SPEED - MIN_SPEED
+            max = (
+                ScrollRules.MAX_SPEED - ScrollRules.MIN_SPEED
+            ).toInt()
 
             progressTintList = ColorStateList.valueOf(TEAL)
             thumbTintList = ColorStateList.valueOf(TEAL)
@@ -238,19 +219,14 @@ internal class AutoScrollOverlay(
             setOnTouchListener { view, event ->
                 when (event.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
-                        view.parent.requestDisallowInterceptTouchEvent(
-                            true
-                        )
+                        view.parent.requestDisallowInterceptTouchEvent(true)
                     }
 
                     MotionEvent.ACTION_UP,
                     MotionEvent.ACTION_CANCEL -> {
-                        view.parent.requestDisallowInterceptTouchEvent(
-                            false
-                        )
+                        view.parent.requestDisallowInterceptTouchEvent(false)
                     }
                 }
-
                 false
             }
 
@@ -262,9 +238,7 @@ internal class AutoScrollOverlay(
                         fromUser: Boolean
                     ) {
                         if (fromUser) {
-                            onSpeed(
-                                (MIN_SPEED + progress).toDouble()
-                            )
+                            onSpeed(ScrollRules.MIN_SPEED + progress)
                         }
                     }
 
@@ -286,12 +260,20 @@ internal class AutoScrollOverlay(
         }
 
         speedLimits.addView(
-            text("1×", 11f, MUTED),
+            text(
+                "${ScrollRules.MIN_SPEED.toInt()}×",
+                11f,
+                MUTED
+            ),
             LinearLayout.LayoutParams(0, dp(20), 1f)
         )
 
         speedLimits.addView(
-            text("25×", 11f, MUTED)
+            text(
+                "${ScrollRules.MAX_SPEED.toInt()}×",
+                11f,
+                MUTED
+            )
         )
 
         advanced.addView(speedLimits)
@@ -310,16 +292,8 @@ internal class AutoScrollOverlay(
         sync(direction, speed, playing)
     }
 
-    fun sync(
-        direction: String,
-        speed: Double,
-        playing: Boolean
-    ) {
-        playButton?.glyph = if (playing) {
-            Glyph.PAUSE
-        } else {
-            Glyph.PLAY
-        }
+    fun sync(direction: String, speed: Double, playing: Boolean) {
+        playButton?.glyph = if (playing) Glyph.PAUSE else Glyph.PLAY
 
         playButton?.contentDescription = if (playing) {
             "Pause scrolling"
@@ -327,37 +301,33 @@ internal class AutoScrollOverlay(
             "Start scrolling"
         }
 
-        fun style(
-            button: TextView?,
-            selected: Boolean
-        ) {
-            button ?: return
-
-            button.setTextColor(
-                if (selected) TEAL else MUTED
-            )
-
-            button.background = shape(
-                if (selected) PALE else SURFACE,
-                10f
-            )
-        }
-
-        style(upButton, direction == "up")
-        style(downButton, direction == "down")
+        styleDirection(upButton, direction == ScrollRules.UP)
+        styleDirection(downButton, direction == ScrollRules.DOWN)
 
         val progress = (
-            speed.roundToInt() - MIN_SPEED
-        ).coerceIn(0, MAX_SPEED - MIN_SPEED)
+            speed.roundToInt() - ScrollRules.MIN_SPEED.toInt()
+        ).coerceIn(
+            0,
+            (ScrollRules.MAX_SPEED - ScrollRules.MIN_SPEED).toInt()
+        )
 
         if (speedSlider?.progress != progress) {
             speedSlider?.progress = progress
         }
 
-        speedLabel?.text = String.format(
-            Locale.US,
-            "%d×",
-            speed.roundToInt()
+        speedLabel?.text = "${speed.roundToInt()}×"
+    }
+
+    private fun styleDirection(
+        button: TextView?,
+        selected: Boolean
+    ) {
+        button ?: return
+
+        button.setTextColor(if (selected) TEAL else MUTED)
+        button.background = shape(
+            if (selected) PALE else SURFACE,
+            10f
         )
     }
 
@@ -366,7 +336,6 @@ internal class AutoScrollOverlay(
         val layout = params ?: return
 
         val screen = service.resources.displayMetrics
-
         layout.width = targetWidth(expanded)
 
         layout.x = layout.x.coerceIn(
@@ -379,7 +348,7 @@ internal class AutoScrollOverlay(
             (screen.heightPixels - panel.height).coerceAtLeast(0)
         )
 
-        windowManager.updateViewLayout(panel, layout)
+        updatePanel(panel, layout)
     }
 
     fun hide() {
@@ -396,7 +365,11 @@ internal class AutoScrollOverlay(
         speedSlider = null
         speedLabel = null
 
-        windowManager.removeView(panel)
+        try {
+            windowManager.removeView(panel)
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "Overlay already detached or removal failed", e)
+        }
     }
 
     private fun toggleExpanded() {
@@ -405,133 +378,104 @@ internal class AutoScrollOverlay(
 
         expanded = !expanded
 
-        titleRow?.visibility = if (expanded) {
-            View.VISIBLE
-        } else {
-            View.GONE
-        }
+        titleRow?.visibility =
+            if (expanded) View.VISIBLE else View.GONE
+        details?.visibility =
+            if (expanded) View.VISIBLE else View.GONE
 
-        details?.visibility = if (expanded) {
-            View.VISIBLE
-        } else {
-            View.GONE
-        }
-
-        expandButton?.glyph = if (expanded) {
-            Glyph.COLLAPSE
-        } else {
-            Glyph.EXPAND
-        }
-
-        expandButton?.contentDescription = if (expanded) {
-            "Collapse controls"
-        } else {
-            "Expand controls"
-        }
+        expandButton?.glyph =
+            if (expanded) Glyph.COLLAPSE else Glyph.EXPAND
+        expandButton?.contentDescription =
+            if (expanded) "Collapse controls" else "Expand controls"
 
         layout.width = targetWidth(expanded)
 
-        val screenWidth =
-            service.resources.displayMetrics.widthPixels
-
+        val screenWidth = service.resources.displayMetrics.widthPixels
         layout.x = layout.x.coerceIn(
             0,
             (screenWidth - layout.width).coerceAtLeast(0)
         )
 
-        windowManager.updateViewLayout(panel, layout)
+        updatePanel(panel, layout)
     }
 
     private fun targetWidth(expanded: Boolean): Int {
-        val screenWidth =
-            service.resources.displayMetrics.widthPixels
+        val screenWidth = service.resources.displayMetrics.widthPixels
 
-        val requested = if (expanded) {
-            dp(EXPANDED_DP)
-        } else {
-            dp(COLLAPSED_DP)
+        val requested =
+            if (expanded) dp(EXPANDED_DP) else dp(COLLAPSED_DP)
+
+        return requested.coerceAtMost(screenWidth.coerceAtLeast(1))
+    }
+
+    private fun updatePanel(
+        panel: View,
+        layout: WindowManager.LayoutParams
+    ) {
+        try {
+            windowManager.updateViewLayout(panel, layout)
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "Unable to update overlay position", e)
         }
-
-        return requested.coerceAtMost(
-            screenWidth.coerceAtLeast(1)
-        )
     }
 
     private fun directionButton(
         title: String,
         direction: String
-    ): TextView =
-        text(title, 14f, INK, bold = true).apply {
-            gravity = Gravity.CENTER
-            isClickable = true
-            contentDescription = "Scroll $direction"
-
-            setOnClickListener {
-                onDirection(direction)
-            }
-        }
+    ) = text(title, 14f, INK, bold = true).apply {
+        gravity = Gravity.CENTER
+        isClickable = true
+        contentDescription = "Scroll $direction"
+        setOnClickListener { onDirection(direction) }
+    }
 
     private fun text(
         value: String,
         size: Float,
         color: Int,
         bold: Boolean = false
-    ): TextView =
-        TextView(service).apply {
-            text = value
-            textSize = size
-            setTextColor(color)
-            gravity = Gravity.CENTER_VERTICAL
+    ) = TextView(service).apply {
+        text = value
+        textSize = size
+        setTextColor(color)
+        gravity = Gravity.CENTER_VERTICAL
 
-            if (bold) {
-                setTypeface(
-                    null,
-                    android.graphics.Typeface.BOLD
-                )
-            }
+        if (bold) {
+            setTypeface(null, android.graphics.Typeface.BOLD)
         }
+    }
 
     private fun icon(
         glyph: Glyph,
         tint: Int,
         fill: Int,
         size: Int
-    ): GlyphView =
-        GlyphView(service).apply {
-            this.glyph = glyph
-            this.tint = tint
+    ) = GlyphView(service).apply {
+        this.glyph = glyph
+        this.tint = tint
 
-            layoutParams = LinearLayout.LayoutParams(
-                dp(size),
-                dp(size)
-            )
+        layoutParams = LinearLayout.LayoutParams(
+            dp(size),
+            dp(size)
+        )
 
-            background = shape(
-                fill,
-                size / 2f
-            )
+        background = shape(fill, size / 2f)
 
-            foreground = RippleDrawable(
-                ColorStateList.valueOf(
-                    Color.argb(28, 0, 0, 0)
-                ),
-                null,
-                shape(
-                    Color.WHITE,
-                    size / 2f
-                )
-            )
+        foreground = RippleDrawable(
+            ColorStateList.valueOf(Color.argb(28, 0, 0, 0)),
+            null,
+            shape(Color.WHITE, size / 2f)
+        )
 
-            isClickable = true
-        }
+        isClickable = true
+    }
 
     private fun shape(
         fill: Int,
         radiusDp: Float,
         stroke: Int? = null
     ): GradientDrawable {
-        val density =
-            service.resources.displayMetrics.density
+        val density = service.resources.displayMetrics.density
 
         return GradientDrawable().apply {
             cornerRadius = radiusDp * density
@@ -547,9 +491,7 @@ internal class AutoScrollOverlay(
     }
 
     private fun dp(value: Int): Int =
-        (
-            value * service.resources.displayMetrics.density
-        ).roundToInt()
+        (value * service.resources.displayMetrics.density).roundToInt()
 
     private class DragPanel(context: Context) :
         LinearLayout(context) {
@@ -564,9 +506,7 @@ internal class AutoScrollOverlay(
         private var lastX = 0f
         private var lastY = 0f
 
-        override fun onInterceptTouchEvent(
-            event: MotionEvent
-        ): Boolean {
+        override fun onInterceptTouchEvent(event: MotionEvent): Boolean {
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     startX = event.rawX
@@ -586,13 +526,10 @@ internal class AutoScrollOverlay(
                     }
                 }
             }
-
             return false
         }
 
-        override fun onTouchEvent(
-            event: MotionEvent
-        ): Boolean {
+        override fun onTouchEvent(event: MotionEvent): Boolean {
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     lastX = event.rawX
@@ -612,9 +549,7 @@ internal class AutoScrollOverlay(
                 }
 
                 MotionEvent.ACTION_UP,
-                MotionEvent.ACTION_CANCEL -> {
-                    return true
-                }
+                MotionEvent.ACTION_CANCEL -> return true
             }
 
             return super.onTouchEvent(event)
@@ -662,18 +597,9 @@ internal class AutoScrollOverlay(
 
                     canvas.drawPath(
                         Path().apply {
-                            moveTo(
-                                cx - 5 * unit,
-                                cy - 8 * unit
-                            )
-                            lineTo(
-                                cx + 8 * unit,
-                                cy
-                            )
-                            lineTo(
-                                cx - 5 * unit,
-                                cy + 8 * unit
-                            )
+                            moveTo(cx - 5 * unit, cy - 8 * unit)
+                            lineTo(cx + 8 * unit, cy)
+                            lineTo(cx - 5 * unit, cy + 8 * unit)
                             close()
                         },
                         paint
@@ -707,28 +633,14 @@ internal class AutoScrollOverlay(
                 Glyph.EXPAND, Glyph.COLLAPSE -> {
                     paint.style = Paint.Style.STROKE
 
-                    val sign = if (
-                        glyph == Glyph.EXPAND
-                    ) {
-                        1f
-                    } else {
-                        -1f
-                    }
+                    val sign =
+                        if (glyph == Glyph.EXPAND) 1f else -1f
 
                     canvas.drawPath(
                         Path().apply {
-                            moveTo(
-                                cx - 7 * unit,
-                                cy - sign * 3 * unit
-                            )
-                            lineTo(
-                                cx,
-                                cy + sign * 4 * unit
-                            )
-                            lineTo(
-                                cx + 7 * unit,
-                                cy - sign * 3 * unit
-                            )
+                            moveTo(cx - 7 * unit, cy - sign * 3 * unit)
+                            lineTo(cx, cy + sign * 4 * unit)
+                            lineTo(cx + 7 * unit, cy - sign * 3 * unit)
                         },
                         paint
                     )

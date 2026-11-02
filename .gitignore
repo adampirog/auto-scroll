@@ -1,17 +1,19 @@
+# Gradle and Kotlin
 .gradle/
 .gradle-bootstrap/
-.idea/
 .kotlin/
-build/
-app/build/
-local.properties
+**/build/
+
+# Local development
+.idea/
+.vscode/
 *.iml
+local.properties
+prototyping/
+
+# Android artifacts and signing
 *.apk
 *.aab
 *.keystore
 *.jks
 *.p12
-
-# Custom
-prototyping/
-.vscode

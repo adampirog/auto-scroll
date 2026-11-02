@@ -19,7 +19,7 @@ import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.Switch
 import android.widget.TextView
-import java.util.Locale
+import com.adampirog.auto_scroll_android.ScrollRules
 import kotlin.math.roundToInt
 
 class MainActivity : Activity() {
@@ -33,9 +33,6 @@ class MainActivity : Activity() {
         private val PALE = Color.rgb(233, 247, 251)
         private val BORDER = Color.rgb(227, 234, 240)
         private val SOFT = Color.rgb(247, 250, 252)
-
-        private const val MIN_SPEED = 1
-        private const val MAX_SPEED = 25
     }
 
     private lateinit var client: ServiceClient
@@ -43,16 +40,17 @@ class MainActivity : Activity() {
     private lateinit var accessStatus: TextView
     private lateinit var accessBadge: TextView
     private lateinit var overlayStatus: TextView
+    private lateinit var overlayIndicator: View
     private lateinit var overlaySwitch: Switch
+
     private lateinit var speedValue: TextView
     private lateinit var speedSlider: SeekBar
-    private lateinit var directionSummary: TextView
     private lateinit var upButton: TextView
     private lateinit var downButton: TextView
 
     private var ready = false
     private var direction = "down"
-    private var speed = 1.0
+    private var speed = ScrollRules.MIN_SPEED
     private var suppressSwitch = false
     private var requestNumber = 0
 
@@ -78,7 +76,7 @@ class MainActivity : Activity() {
     private fun buildInterface() {
         val scroll = ScrollView(this).apply {
             isFillViewport = true
-            clipToPadding = false
+            clipToPadding = true
             setBackgroundColor(CANVAS)
             overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
         }
@@ -88,89 +86,117 @@ class MainActivity : Activity() {
                 val bars = insets.getInsets(
                     WindowInsets.Type.systemBars()
                 )
+
                 view.setPadding(0, bars.top, 0, bars.bottom)
                 insets
             }
         }
 
-        val page = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(28), dp(20), dp(32))
+        val page = column().apply {
+            setPadding(dp(20), dp(18), dp(20), dp(20))
         }
 
         scroll.addView(page)
         setContentView(scroll)
 
-        // Header
+        page.addView(
+            buildHeader(),
+            sectionParams(dp(20))
+        )
+
+        page.addView(
+            buildOverlayCard(),
+            sectionParams()
+        )
+
+        page.addView(
+            buildAccessibilityCard(),
+            sectionParams()
+        )
+
+        page.addView(buildScrollingCard())
+
+        syncSettings()
+    }
+
+    private fun buildHeader(): LinearLayout {
         val header = row().apply {
             gravity = Gravity.CENTER_VERTICAL
         }
 
-        val logo = label("↕", 30f, Color.WHITE, bold = true).apply {
+        val logo = label(
+            "↕",
+            26f,
+            Color.WHITE,
+            bold = true
+        ).apply {
             gravity = Gravity.CENTER
-            background = rounded(TEAL, 17f)
-            elevation = dp(3).toFloat()
+            background = rounded(TEAL, 15f)
+            elevation = dp(2).toFloat()
         }
 
         header.addView(
             logo,
-            LinearLayout.LayoutParams(dp(56), dp(56))
+            LinearLayout.LayoutParams(dp(48), dp(48))
         )
 
         val heading = column().apply {
-            setPadding(dp(15), 0, 0, 0)
+            setPadding(dp(14), 0, 0, 0)
+
+            addView(
+                label("Auto Scroll", 23f, INK, bold = true)
+            )
+
+            addView(
+                label(
+                    "Hands-free scrolling for long content",
+                    12f,
+                    MUTED
+                ),
+                spaced(dp(4))
+            )
         }
 
-        heading.addView(
-            label("Auto Scroll", 25f, INK, bold = true)
-        )
-        heading.addView(
-            label(
-                "Hands-free scrolling for long content",
-                12f,
-                MUTED
-            ),
-            spaced(dp(5))
-        )
+        header.addView(heading, weightedParams())
 
-        header.addView(
-            heading,
-            LinearLayout.LayoutParams(0, -2, 1f)
-        )
+        return header
+    }
 
-        page.addView(
-            header,
-            LinearLayout.LayoutParams(-1, -2).apply {
-                bottomMargin = dp(30)
-            }
-        )
+    private fun buildOverlayCard(): LinearLayout {
+        val card = card()
 
-        // Floating controls
-        val overlayCard = card()
-
-        val overlayHeader = row().apply {
+        val header = row().apply {
             gravity = Gravity.CENTER_VERTICAL
         }
 
-        val overlayHeading = column()
+        val title = column().apply {
+            addView(
+                label(
+                    "Floating controls",
+                    16f,
+                    INK,
+                    bold = true
+                )
+            )
 
-        overlayHeading.addView(
-            label("Floating controls", 17f, INK, bold = true)
-        )
-        overlayHeading.addView(
-            label("Show controls over other apps", 12f, MUTED),
-            spaced(dp(6))
-        )
+            addView(
+                label(
+                    "Show controls over other apps",
+                    12f,
+                    MUTED
+                ),
+                spaced(dp(5))
+            )
+        }
 
-        overlayHeader.addView(
-            overlayHeading,
-            LinearLayout.LayoutParams(0, -2, 1f)
-        )
+        header.addView(title, weightedParams())
 
         overlaySwitch = Switch(this).apply {
             isEnabled = false
 
-            thumbTintList = ColorStateList.valueOf(Color.WHITE)
+            thumbTintList = ColorStateList.valueOf(
+                Color.WHITE
+            )
 
             trackTintList = ColorStateList(
                 arrayOf(
@@ -188,51 +214,65 @@ class MainActivity : Activity() {
             }
         }
 
-        overlayHeader.addView(overlaySwitch)
-        overlayCard.addView(overlayHeader)
+        header.addView(overlaySwitch)
+        card.addView(header)
 
-        val overlayStateRow = row().apply {
+        val statusRow = row().apply {
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(19), 0, dp(4))
         }
 
-        val indicator = View(this).apply {
-            background = rounded(TEAL, 10f)
+        overlayIndicator = View(this).apply {
+            background = rounded(BORDER, 10f)
         }
 
-        overlayStateRow.addView(
-            indicator,
+        statusRow.addView(
+            overlayIndicator,
             LinearLayout.LayoutParams(dp(7), dp(7))
         )
 
-        overlayStatus = label("Overlay hidden", 12f, MUTED)
+        overlayStatus = label(
+            "Overlay hidden",
+            12f,
+            MUTED
+        )
 
-        overlayStateRow.addView(
+        statusRow.addView(
             overlayStatus,
             LinearLayout.LayoutParams(-2, -2).apply {
                 leftMargin = dp(9)
             }
         )
 
-        overlayCard.addView(overlayStateRow)
-
-        overlayCard.addView(
-            pillButton("Refresh status") { refresh() },
-            spaced(dp(15))
+        card.addView(
+            statusRow,
+            spaced(dp(12))
         )
 
-        page.addView(overlayCard, sectionParams())
+        card.addView(
+            pillButton("Refresh status") {
+                refresh()
+            },
+            spaced(dp(12))
+        )
 
-        // Accessibility
-        val accessCard = card()
+        return card
+    }
 
-        val accessHeader = row().apply {
+    private fun buildAccessibilityCard(): LinearLayout {
+        val card = card()
+
+        val header = row().apply {
             gravity = Gravity.CENTER_VERTICAL
         }
 
-        accessHeader.addView(
-            label("Accessibility", 17f, INK, bold = true),
-            LinearLayout.LayoutParams(0, -2, 1f)
+        header.addView(
+            label(
+                "Accessibility",
+                16f,
+                INK,
+                bold = true
+            ),
+            weightedParams()
         )
 
         accessBadge = label(
@@ -242,99 +282,90 @@ class MainActivity : Activity() {
             bold = true
         ).apply {
             gravity = Gravity.CENTER
-            setPadding(dp(12), dp(7), dp(12), dp(7))
+            setPadding(dp(11), dp(6), dp(11), dp(6))
             background = rounded(SOFT, 50f)
         }
 
-        accessHeader.addView(accessBadge)
-        accessCard.addView(accessHeader)
+        header.addView(accessBadge)
+        card.addView(header)
 
         accessStatus = label(
             "Checking accessibility...",
-            13f,
+            12f,
             MUTED
         )
 
-        accessCard.addView(
+        card.addView(
             accessStatus,
-            spaced(dp(15))
+            spaced(dp(12))
         )
 
-        val accessActions = row()
+        val actions = row()
 
-        accessActions.addView(
-            pillButton("Check access") { refresh() },
+        actions.addView(
+            pillButton("Check access") {
+                refresh()
+            },
             weightedParams()
         )
 
-        accessActions.addView(
+        actions.addView(
             pillButton("Settings", filled = true) {
                 startActivity(
                     Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
                 )
             },
-            weightedParams(left = dp(10))
+            weightedParams(dp(10))
         )
 
-        accessCard.addView(
-            accessActions,
-            spaced(dp(18))
+        card.addView(
+            actions,
+            spaced(dp(14))
         )
 
-        page.addView(accessCard, sectionParams())
+        return card
+    }
 
-        // Scrolling
-        val scrollingCard = card()
+    private fun buildScrollingCard(): LinearLayout {
+        val card = card()
 
-        scrollingCard.addView(
-            label("Scrolling", 17f, INK, bold = true)
-        )
-
-        directionSummary = label(
-            "1×  ·  Down",
-            13f,
-            MUTED
-        )
-
-        scrollingCard.addView(
-            directionSummary,
-            spaced(dp(6))
+        card.addView(
+            label(
+                "Scrolling",
+                16f,
+                INK,
+                bold = true
+            )
         )
 
         val speedHeader = row().apply {
             gravity = Gravity.CENTER_VERTICAL
         }
 
-        val speedHeading = column()
-        speedHeading.addView(
-            label("Speed", 14f, INK, bold = true)
-        )
-        speedHeading.addView(
-            label("Adjust scrolling intensity", 12f, MUTED),
-            spaced(dp(5))
-        )
-
         speedHeader.addView(
-            speedHeading,
-            LinearLayout.LayoutParams(0, -2, 1f)
+            label("Speed", 14f, INK, bold = true),
+            weightedParams()
         )
 
         speedValue = label(
             "1×",
-            29f,
+            26f,
             TEAL,
             bold = true
         )
 
         speedHeader.addView(speedValue)
 
-        scrollingCard.addView(
+        card.addView(
             speedHeader,
-            spaced(dp(25))
+            spaced(dp(16))
         )
 
         speedSlider = SeekBar(this).apply {
-            max = MAX_SPEED - MIN_SPEED
+            max = (
+                ScrollRules.MAX_SPEED - ScrollRules.MIN_SPEED
+            ).toInt()
+
             progress = 0
             isEnabled = false
 
@@ -351,7 +382,7 @@ class MainActivity : Activity() {
                         fromUser: Boolean
                     ) {
                         if (fromUser) {
-                            speed = (progress + MIN_SPEED).toDouble()
+                            speed = ScrollRules.MIN_SPEED + progress
                             syncSettings()
                         }
                     }
@@ -369,31 +400,45 @@ class MainActivity : Activity() {
             )
         }
 
-        scrollingCard.addView(
+        card.addView(
             speedSlider,
-            spaced(dp(12))
+            spaced(dp(8))
         )
 
         val limits = row()
 
         limits.addView(
-            label("1×  Gentle", 11f, MUTED),
+            label(
+                "${ScrollRules.MIN_SPEED.toInt()}×",
+                11f,
+                MUTED
+            ),
             weightedParams()
         )
+
         limits.addView(
-            label("25×  Fast", 11f, MUTED)
+            label(
+                "${ScrollRules.MAX_SPEED.toInt()}×",
+                11f,
+                MUTED
+            )
         )
 
-        scrollingCard.addView(limits)
+        card.addView(limits)
 
-        scrollingCard.addView(
-            label("Direction", 14f, INK, bold = true),
-            spaced(dp(27))
+        card.addView(
+            label(
+                "Direction",
+                14f,
+                INK,
+                bold = true
+            ),
+            spaced(dp(16))
         )
 
         val directionGroup = row().apply {
             setPadding(dp(4), dp(4), dp(4), dp(4))
-            background = rounded(SOFT, 16f)
+            background = rounded(SOFT, 15f)
         }
 
         upButton = pillButton("↑  Up") {
@@ -412,39 +457,18 @@ class MainActivity : Activity() {
             upButton,
             weightedParams()
         )
+
         directionGroup.addView(
             downButton,
-            weightedParams(left = dp(4))
+            weightedParams(dp(4))
         )
 
-        scrollingCard.addView(
+        card.addView(
             directionGroup,
-            spaced(dp(12))
+            spaced(dp(9))
         )
 
-        scrollingCard.addView(
-            label(
-                "Higher speeds use faster, longer swipe gestures.",
-                11f,
-                MUTED
-            ),
-            spaced(dp(19))
-        )
-
-        page.addView(scrollingCard, sectionParams())
-
-        page.addView(
-            label(
-                "Auto Scroll · Native Android",
-                11f,
-                MUTED
-            ).apply {
-                gravity = Gravity.CENTER
-            },
-            spaced(dp(8))
-        )
-
-        syncSettings()
+        return card
     }
 
     private fun refresh() {
@@ -488,31 +512,40 @@ class MainActivity : Activity() {
                 return@request
             }
 
+            val currentState = state!!
+
             accessStatus.text = "Accessibility is ready"
             accessStatus.setTextColor(TEAL_DARK)
             setAccessBadge("READY", true)
 
-            val currentState = state!!
-            val visible = currentState.getBoolean("visible", false)
+            val visible = currentState.getBoolean(
+                "visible",
+                false
+            )
 
             setOverlayChecked(visible)
+
             overlayStatus.text = if (visible) {
                 "Overlay active"
             } else {
                 "Overlay hidden"
             }
 
-            direction = currentState.getString("direction")
-                ?.takeIf { it == "up" || it == "down" }
-                ?: "down"
+            direction = ScrollRules.restoreDirection(
+                currentState.getString("direction")
+            )
 
-            speed = currentState
-                .getDouble("speed", 1.0)
-                .roundToInt()
-                .coerceIn(MIN_SPEED, MAX_SPEED)
-                .toDouble()
+            speed = ScrollRules.normalizeSpeed(
+                currentState.getDouble(
+                    "speed",
+                    ScrollRules.MIN_SPEED
+                )
+            )
 
-            speedSlider.progress = speed.toInt() - MIN_SPEED
+            speedSlider.progress = (
+                speed - ScrollRules.MIN_SPEED
+            ).toInt()
+
             syncSettings()
         }
     }
@@ -579,19 +612,21 @@ class MainActivity : Activity() {
         suppressSwitch = true
         overlaySwitch.isChecked = value
         suppressSwitch = false
+
+        overlayIndicator.background = rounded(
+            if (value) TEAL else BORDER,
+            10f
+        )
     }
 
     private fun syncSettings() {
-        val value = speed.roundToInt()
-        speedValue.text = String.format(Locale.US, "%d×", value)
-
-        val name = if (direction == "up") "Up" else "Down"
-        directionSummary.text = "$value×  ·  $name"
+        speedValue.text = "${speed.roundToInt()}×"
 
         updateDirectionButton(
             upButton,
             selected = direction == "up"
         )
+
         updateDirectionButton(
             downButton,
             selected = direction == "down"
@@ -617,124 +652,124 @@ class MainActivity : Activity() {
         active: Boolean
     ) {
         accessBadge.text = value
+
         accessBadge.setTextColor(
             if (active) TEAL_DARK else MUTED
         )
+
         accessBadge.background = rounded(
             if (active) PALE else SOFT,
             50f
         )
     }
 
-    private fun row(): LinearLayout =
-        LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-        }
+    private fun row() = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+    }
 
-    private fun column(): LinearLayout =
-        LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
+    private fun column() = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+    }
 
-    private fun card(): LinearLayout =
-        column().apply {
-            setPadding(
-                dp(20),
-                dp(21),
-                dp(20),
-                dp(21)
-            )
-            background = rounded(Color.WHITE, 21f, BORDER)
-            elevation = dp(2).toFloat()
-            clipToOutline = true
-        }
+    private fun card() = column().apply {
+        setPadding(dp(18), dp(17), dp(18), dp(17))
+        background = rounded(Color.WHITE, 20f, BORDER)
+        elevation = dp(2).toFloat()
+        clipToOutline = true
+    }
 
     private fun label(
         value: String,
         size: Float,
         color: Int,
         bold: Boolean = false
-    ): TextView =
-        TextView(this).apply {
-            text = value
-            textSize = size
-            setTextColor(color)
-            includeFontPadding = false
+    ) = TextView(this).apply {
+        text = value
+        textSize = size
+        setTextColor(color)
+        includeFontPadding = false
 
-            if (bold) {
-                setTypeface(null, Typeface.BOLD)
-            }
+        if (bold) {
+            setTypeface(null, Typeface.BOLD)
         }
+    }
 
     private fun pillButton(
         title: String,
         filled: Boolean = false,
         onClick: () -> Unit
-    ): TextView =
-        label(
-            title,
-            13f,
-            if (filled) Color.WHITE else TEAL_DARK,
-            bold = true
-        ).apply {
-            gravity = Gravity.CENTER
-            minHeight = dp(46)
-            setPadding(dp(12), dp(10), dp(12), dp(10))
+    ) = label(
+        title,
+        13f,
+        if (filled) Color.WHITE else TEAL_DARK,
+        bold = true
+    ).apply {
+        gravity = Gravity.CENTER
+        minHeight = dp(44)
 
-            background = ripple(
-                if (filled) TEAL else PALE,
-                13f
-            )
+        setPadding(
+            dp(12),
+            dp(9),
+            dp(12),
+            dp(9)
+        )
 
-            isClickable = true
-            isFocusable = true
-            setOnClickListener { onClick() }
-        }
+        background = ripple(
+            if (filled) TEAL else PALE,
+            13f
+        )
+
+        isClickable = true
+        isFocusable = true
+
+        setOnClickListener { onClick() }
+    }
 
     private fun rounded(
         fill: Int,
         radius: Float,
         stroke: Int? = null
-    ): GradientDrawable =
-        GradientDrawable().apply {
-            setColor(fill)
-            cornerRadius =
-                radius * resources.displayMetrics.density
+    ) = GradientDrawable().apply {
+        setColor(fill)
 
-            if (stroke != null) {
-                setStroke(dp(1), stroke)
-            }
+        cornerRadius =
+            radius * resources.displayMetrics.density
+
+        if (stroke != null) {
+            setStroke(dp(1), stroke)
         }
+    }
 
     private fun ripple(
         fill: Int,
         radius: Float
-    ): RippleDrawable =
-        RippleDrawable(
-            ColorStateList.valueOf(
-                Color.argb(35, 0, 70, 100)
-            ),
-            rounded(fill, radius),
-            rounded(Color.WHITE, radius)
-        )
+    ) = RippleDrawable(
+        ColorStateList.valueOf(
+            Color.argb(35, 0, 70, 100)
+        ),
+        rounded(fill, radius),
+        rounded(Color.WHITE, radius)
+    )
 
     private fun dp(value: Int): Int =
-        (value * resources.displayMetrics.density).roundToInt()
+        (
+            value * resources.displayMetrics.density
+        ).roundToInt()
 
-    private fun sectionParams(): LinearLayout.LayoutParams =
-        LinearLayout.LayoutParams(-1, -2).apply {
-            bottomMargin = dp(18)
-        }
+    private fun sectionParams(
+        bottom: Int = dp(12)
+    ) = LinearLayout.LayoutParams(-1, -2).apply {
+        bottomMargin = bottom
+    }
 
-    private fun spaced(top: Int): LinearLayout.LayoutParams =
+    private fun spaced(top: Int) =
         LinearLayout.LayoutParams(-1, -2).apply {
             topMargin = top
         }
 
     private fun weightedParams(
         left: Int = 0
-    ): LinearLayout.LayoutParams =
-        LinearLayout.LayoutParams(0, -2, 1f).apply {
-            leftMargin = left
-        }
+    ) = LinearLayout.LayoutParams(0, -2, 1f).apply {
+        leftMargin = left
+    }
 }

@@ -11,23 +11,31 @@ internal data class SwipePlan(
     val durationMs: Long
 )
 
-/** Android-independent rules used by the accessibility service. */
+/** Android-independent scrolling rules. */
 internal object ScrollRules {
     const val MIN_SPEED = 1.0
     const val MAX_SPEED = 25.0
-    const val DEFAULT_DIRECTION = "down"
+
+    const val UP = "up"
+    const val DOWN = "down"
+    const val DEFAULT_DIRECTION = DOWN
+
+    fun isValidDirection(direction: String?): Boolean =
+        direction == UP || direction == DOWN
 
     fun isValid(direction: String?, speed: Double): Boolean =
-        (direction == "up" || direction == "down") &&
-            speed.isFinite() && speed in MIN_SPEED..MAX_SPEED
+        isValidDirection(direction) &&
+            speed.isFinite() &&
+            speed in MIN_SPEED..MAX_SPEED
 
     fun restoreDirection(value: String?): String =
-        value?.takeIf { it == "up" || it == "down" }
-            ?: DEFAULT_DIRECTION
+        value?.takeIf(::isValidDirection) ?: DEFAULT_DIRECTION
 
     fun normalizeSpeed(value: Double): Double =
         if (value.isFinite()) {
-            value.roundToInt().coerceIn(1, 25).toDouble()
+            value.roundToInt()
+                .coerceIn(MIN_SPEED.toInt(), MAX_SPEED.toInt())
+                .toDouble()
         } else {
             MIN_SPEED
         }
@@ -49,24 +57,23 @@ internal object ScrollRules {
         require(widthPx > 0 && heightPx > 0) {
             "Screen dimensions must be positive"
         }
-
         require(isValid(direction, speed)) {
             "Invalid scrolling configuration"
         }
 
         val distanceFraction = (
-            0.17 + 0.015 * (speed - 1.0)
+            0.17 + 0.015 * (speed - MIN_SPEED)
         ).coerceIn(0.17, 0.53)
 
         val distance = heightPx * distanceFraction.toFloat()
 
-        val startY = heightPx * if (direction == "down") {
+        val startY = heightPx * if (direction == DOWN) {
             0.70f
         } else {
             0.30f
         }
 
-        val endY = if (direction == "down") {
+        val endY = if (direction == DOWN) {
             startY - distance
         } else {
             startY + distance
@@ -84,4 +91,3 @@ internal object ScrollRules {
         )
     }
 }
-

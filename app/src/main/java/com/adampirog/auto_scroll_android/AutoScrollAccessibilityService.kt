@@ -13,19 +13,17 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.ResultReceiver
+import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 
-/**
- * Native accessibility scrolling engine.
- *
- * Performs user-requested gestures without reading window contents
- * or running a polling/keep-alive worker.
- */
 class AutoScrollAccessibilityService : AccessibilityService() {
 
     companion object {
         const val ACTION_COMMAND =
             "com.adampirog.autoscroll.ACCESSIBILITY_COMMAND"
+
+        const val COMMAND_PERMISSION =
+            "com.adampirog.autoscroll.permission.ACCESSIBILITY_COMMAND"
 
         const val EXTRA_COMMAND = "command"
         const val EXTRA_REPLY = "reply"
@@ -38,6 +36,7 @@ class AutoScrollAccessibilityService : AccessibilityService() {
         const val MIN_SPEED = ScrollRules.MIN_SPEED
         const val MAX_SPEED = ScrollRules.MAX_SPEED
 
+        private const val TAG = "AutoScrollService"
         private const val PREFS = "auto_scroll"
         private const val PREF_VISIBLE = "overlay_visible"
         private const val PREF_SPEED = "speed"
@@ -51,32 +50,27 @@ class AutoScrollAccessibilityService : AccessibilityService() {
     }
 
     private var overlay: AutoScrollOverlay? = null
-    private var receiverRegistered = false
+    private var commandRegistered = false
+    private var screenRegistered = false
 
-    private var direction = "down"
-    private var speed = 1.0
+    private var direction = ScrollRules.DEFAULT_DIRECTION
+    private var speed = ScrollRules.MIN_SPEED
     private var playing = false
 
     private var generation = 0
     private var nextGesture: Runnable? = null
 
     private val commandReceiver = object : BroadcastReceiver() {
-        override fun onReceive(
-            context: Context,
-            intent: Intent
-        ) {
+        override fun onReceive(context: Context, intent: Intent) {
             val reply = getReply(intent) ?: return
 
             when (intent.getStringExtra(EXTRA_COMMAND)) {
-                "state" -> {
-                    reply.send(RESULT_OK, state())
-                }
+                "state" -> reply.send(RESULT_OK, state())
 
                 "show" -> {
-                    val shown = showOverlay()
-
+                    val success = showOverlay()
                     reply.send(
-                        if (shown) RESULT_OK else RESULT_FAILED,
+                        if (success) RESULT_OK else RESULT_FAILED,
                         state()
                     )
                 }
@@ -89,7 +83,6 @@ class AutoScrollAccessibilityService : AccessibilityService() {
                 "configure" -> {
                     val newDirection =
                         intent.getStringExtra(EXTRA_DIRECTION)
-
                     val newSpeed = intent.getDoubleExtra(
                         EXTRA_SPEED,
                         Double.NaN
@@ -104,18 +97,13 @@ class AutoScrollAccessibilityService : AccessibilityService() {
                     reply.send(RESULT_OK, state())
                 }
 
-                else -> {
-                    reply.send(RESULT_FAILED, state())
-                }
+                else -> reply.send(RESULT_FAILED, state())
             }
         }
     }
 
     private val screenReceiver = object : BroadcastReceiver() {
-        override fun onReceive(
-            context: Context,
-            intent: Intent
-        ) {
+        override fun onReceive(context: Context, intent: Intent) {
             if (intent.action == Intent.ACTION_SCREEN_OFF) {
                 pauseScrolling()
             }
@@ -126,53 +114,76 @@ class AutoScrollAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
 
         direction = ScrollRules.restoreDirection(
-            preferences.getString(PREF_DIRECTION, "down")
+            preferences.getString(
+                PREF_DIRECTION,
+                ScrollRules.DEFAULT_DIRECTION
+            )
         )
 
         speed = ScrollRules.normalizeSpeed(
-            preferences.getFloat(PREF_SPEED, 1.0f).toDouble()
+            preferences.getFloat(
+                PREF_SPEED,
+                ScrollRules.MIN_SPEED.toFloat()
+            ).toDouble()
         )
 
-        if (!receiverRegistered) {
-            val filter = IntentFilter(ACTION_COMMAND)
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                registerReceiver(
-                    commandReceiver,
-                    filter,
-                    Context.RECEIVER_NOT_EXPORTED
-                )
-            } else {
-                @Suppress("DEPRECATION")
-                registerReceiver(commandReceiver, filter)
-            }
-
-            registerReceiver(
-                screenReceiver,
-                IntentFilter(Intent.ACTION_SCREEN_OFF)
-            )
-
-            receiverRegistered = true
-        }
+        registerReceivers()
 
         if (preferences.getBoolean(PREF_VISIBLE, false)) {
             showOverlay(persist = false)
         }
     }
 
-    override fun onAccessibilityEvent(
-        event: AccessibilityEvent?
-    ) {
-        // No accessibility content is collected.
+    private fun registerReceivers() {
+        if (!commandRegistered) {
+            try {
+                val filter = IntentFilter(ACTION_COMMAND)
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    registerReceiver(
+                        commandReceiver,
+                        filter,
+                        COMMAND_PERMISSION,
+                        null,
+                        Context.RECEIVER_NOT_EXPORTED
+                    )
+                } else {
+                    registerReceiver(
+                        commandReceiver,
+                        filter,
+                        COMMAND_PERMISSION,
+                        null
+                    )
+                }
+
+                commandRegistered = true
+            } catch (e: RuntimeException) {
+                Log.e(TAG, "Command receiver registration failed", e)
+            }
+        }
+
+        if (!screenRegistered) {
+            try {
+                registerReceiver(
+                    screenReceiver,
+                    IntentFilter(Intent.ACTION_SCREEN_OFF)
+                )
+                screenRegistered = true
+            } catch (e: RuntimeException) {
+                Log.e(TAG, "Screen receiver registration failed", e)
+            }
+        }
+    }
+
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        // Window contents and events are not inspected.
     }
 
     override fun onInterrupt() {
         pauseScrolling()
     }
 
-    override fun onConfigurationChanged(
-        newConfig: Configuration
-    ) {
+    override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         overlay?.refreshBounds()
     }
@@ -188,13 +199,29 @@ class AutoScrollAccessibilityService : AccessibilityService() {
     }
 
     private fun release() {
-        pauseScrolling()
         hideOverlay(persist = false)
+        unregisterReceivers()
+    }
 
-        if (receiverRegistered) {
-            unregisterReceiver(commandReceiver)
-            unregisterReceiver(screenReceiver)
-            receiverRegistered = false
+    private fun unregisterReceivers() {
+        if (commandRegistered) {
+            try {
+                unregisterReceiver(commandReceiver)
+            } catch (e: IllegalArgumentException) {
+                Log.w(TAG, "Command receiver already unregistered", e)
+            } finally {
+                commandRegistered = false
+            }
+        }
+
+        if (screenRegistered) {
+            try {
+                unregisterReceiver(screenReceiver)
+            } catch (e: IllegalArgumentException) {
+                Log.w(TAG, "Screen receiver already unregistered", e)
+            } finally {
+                screenRegistered = false
+            }
         }
     }
 
@@ -209,13 +236,12 @@ class AutoScrollAccessibilityService : AccessibilityService() {
             intent.getParcelableExtra(EXTRA_REPLY)
         }
 
-    private fun state(): Bundle =
-        Bundle().apply {
-            putBoolean("visible", overlay != null)
-            putBoolean("playing", playing)
-            putString("direction", direction)
-            putDouble("speed", speed)
-        }
+    private fun state(): Bundle = Bundle().apply {
+        putBoolean("visible", overlay != null)
+        putBoolean("playing", playing)
+        putString("direction", direction)
+        putDouble("speed", speed)
+    }
 
     private fun setConfiguration(
         newDirection: String,
@@ -232,21 +258,15 @@ class AutoScrollAccessibilityService : AccessibilityService() {
         overlay?.sync(direction, speed, playing)
     }
 
-    private fun showOverlay(
-        persist: Boolean = true
-    ): Boolean {
+    private fun showOverlay(persist: Boolean = true): Boolean {
         if (overlay != null) return true
 
         val controller = AutoScrollOverlay(
             service = this,
             onToggle = ::toggleScrolling,
             onClose = { hideOverlay() },
-            onDirection = {
-                setConfiguration(it, speed)
-            },
-            onSpeed = {
-                setConfiguration(direction, it)
-            }
+            onDirection = { setConfiguration(it, speed) },
+            onSpeed = { setConfiguration(direction, it) }
         )
 
         return try {
@@ -260,19 +280,32 @@ class AutoScrollAccessibilityService : AccessibilityService() {
             }
 
             true
-        } catch (_: Exception) {
-            controller.hide()
+        } catch (e: RuntimeException) {
+            Log.e(TAG, "Unable to show overlay", e)
+
+            try {
+                controller.hide()
+            } catch (cleanupError: RuntimeException) {
+                Log.w(TAG, "Overlay cleanup failed", cleanupError)
+            }
+
             false
         }
     }
 
-    private fun hideOverlay(
-        persist: Boolean = true
-    ) {
+    private fun hideOverlay(persist: Boolean = true) {
         pauseScrolling()
 
-        overlay?.hide()
+        val current = overlay
         overlay = null
+
+        if (current != null) {
+            try {
+                current.hide()
+            } catch (e: RuntimeException) {
+                Log.w(TAG, "Unable to remove overlay", e)
+            }
+        }
 
         if (persist) {
             preferences.edit()
@@ -282,11 +315,7 @@ class AutoScrollAccessibilityService : AccessibilityService() {
     }
 
     private fun toggleScrolling() {
-        if (playing) {
-            pauseScrolling()
-        } else {
-            startScrolling()
-        }
+        if (playing) pauseScrolling() else startScrolling()
     }
 
     private fun startScrolling() {
@@ -349,11 +378,7 @@ class AutoScrollAccessibilityService : AccessibilityService() {
                 override fun onCompleted(
                     gestureDescription: GestureDescription?
                 ) {
-                    if (!playing || token != generation) {
-                        return
-                    }
-
-                    val delayMs = ScrollRules.delayMs(speed)
+                    if (!playing || token != generation) return
 
                     val task = Runnable {
                         nextGesture = null
@@ -361,23 +386,21 @@ class AutoScrollAccessibilityService : AccessibilityService() {
                     }
 
                     nextGesture = task
-                    handler.postDelayed(task, delayMs)
+                    handler.postDelayed(
+                        task,
+                        ScrollRules.delayMs(speed)
+                    )
                 }
 
                 override fun onCancelled(
                     gestureDescription: GestureDescription?
                 ) {
-                    if (token == generation) {
-                        pauseScrolling()
-                    }
+                    if (token == generation) pauseScrolling()
                 }
             },
             handler
         )
 
-        if (!dispatched) {
-            pauseScrolling()
-        }
+        if (!dispatched) pauseScrolling()
     }
 }
-
