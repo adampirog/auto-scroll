@@ -3,32 +3,32 @@ import flet as ft
 
 @ft.control("AndroidAccessibility")
 class AndroidAccessibility(ft.Service):
-    """Android accessibility and floating-overlay integration."""
+    """Interface to AutoScroll's native Android service."""
 
-    async def is_enabled(self) -> bool:
-        """Whether the native accessibility service is connected."""
-        return bool(await self._invoke_method("is_enabled"))
+    async def get_state(self) -> dict[str, object]:
+        """Get permission, service, overlay, and scrolling state."""
+        return await self._invoke_method("get_state")
 
     async def request_permission(self) -> bool:
-        """Open Android accessibility settings if access is unavailable."""
+        """Open Android Accessibility settings."""
         return bool(await self._invoke_method("request_permission"))
 
-    async def has_overlay_permission(self) -> bool:
-        """Whether Android permits drawing over other apps."""
-        return bool(await self._invoke_method("overlay_permission_granted"))
-
-    async def request_overlay_permission(self) -> bool:
-        """Open Android overlay permission settings if needed."""
-        return bool(await self._invoke_method("request_overlay_permission"))
-
     async def show_overlay(self) -> bool:
-        """Show the floating controller."""
+        """Show the native floating controller."""
         return bool(await self._invoke_method("show_overlay"))
 
     async def hide_overlay(self) -> bool:
-        """Hide the floating controller."""
+        """Hide the native floating controller."""
         return bool(await self._invoke_method("hide_overlay"))
 
-    async def is_overlay_visible(self) -> bool:
-        """Whether the floating controller is visible."""
-        return bool(await self._invoke_method("is_overlay_visible"))
+    async def set_config(self, direction: str, speed: float) -> bool:
+        """Update persistent native scrolling settings."""
+        return bool(
+            await self._invoke_method(
+                "set_config",
+                {
+                    "direction": direction,
+                    "speed": speed,
+                },
+            )
+        )

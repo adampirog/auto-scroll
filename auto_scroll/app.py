@@ -1,5 +1,3 @@
-from collections.abc import Awaitable, Callable
-
 import flet as ft
 from auto_scroll_android import AndroidAccessibility
 
@@ -21,23 +19,268 @@ class AutoScrollApp:
 
         accessibility = AndroidAccessibility()
 
-        permissions_card, check_access = self._permissions_card(accessibility)
+        access_status = ft.Text("Checking accessibility...", color=MUTED, size=13)
+
+        overlay_status = ft.Text("Overlay hidden", color=MUTED, size=12)
+
+        overlay_switch = ft.Switch(value=False, disabled=True)
+
+        speed_value = ft.Text(
+            f"{self.settings.speed:.1f}x",
+            color=INK,
+            size=20,
+            weight=ft.FontWeight.BOLD,
+        )
+
+        speed_slider = ft.Slider(
+            min=0.5,
+            max=5.0,
+            divisions=9,
+            value=self.settings.speed,
+            label="{value}x",
+            round=1,
+            active_color=TEAL,
+            disabled=True,
+        )
+
+        direction_summary = ft.Text(self.settings.description, color=MUTED, size=13)
+
+        up_button = ft.Button(content="Up", icon=ft.Icons.ARROW_UPWARD, expand=True, disabled=True)
+
+        down_button = ft.Button(
+            content="Down", icon=ft.Icons.ARROW_DOWNWARD, expand=True, disabled=True
+        )
+
+        ready = False
+
+        def update_direction_buttons() -> None:
+            for direction, button in (("up", up_button), ("down", down_button)):
+                selected = self.settings.direction == direction
+                button.bgcolor = TEAL if selected else PALE
+                button.color = CARD if selected else INK
+                button.icon_color = CARD if selected else TEAL
+
+        def update_settings_display() -> None:
+            speed_value.value = f"{self.settings.speed:.1f}×"
+            direction_summary.value = self.settings.description
+            update_direction_buttons()
+
+        async def refresh() -> None:
+            nonlocal ready
+
+            try:
+                state = await accessibility.get_state()
+
+                enabled = bool(state.get("permission_enabled"))
+                ready = bool(state.get("service_ready"))
+
+                if ready:
+                    access_status.value = "Accessibility ready"
+                    access_status.color = TEAL
+                elif enabled:
+                    access_status.value = "Accessibility enabled, service unavailable"
+                    access_status.color = MUTED
+                else:
+                    access_status.value = "Accessibility disabled"
+                    access_status.color = MUTED
+
+                overlay_visible = ready and bool(state.get("overlay_visible"))
+
+                overlay_switch.value = overlay_visible
+                overlay_switch.disabled = not ready
+
+                overlay_status.value = "Overlay active" if overlay_visible else "Overlay hidden"
+
+                speed_slider.disabled = not ready
+                up_button.disabled = not ready
+                down_button.disabled = not ready
+
+                if ready:
+                    self.settings.set_speed(float(state["speed"]))
+                    self.settings.set_direction(str(state["direction"]))
+
+                    speed_slider.value = self.settings.speed
+                    update_settings_display()
+
+            except Exception as exc:
+                ready = False
+                access_status.value = f"Accessibility error: {exc}"
+                access_status.color = MUTED
+
+                overlay_switch.value = False
+                overlay_switch.disabled = True
+
+                speed_slider.disabled = True
+                up_button.disabled = True
+                down_button.disabled = True
+
+            self.page.update()
+
+        async def enable_access() -> None:
+            try:
+                await accessibility.request_permission()
+            except Exception as exc:
+                access_status.value = f"Unable to open Settings: {exc}"
+                self.page.update()
+
+        async def toggle_overlay(event: ft.Event[ft.Switch]) -> None:
+            requested = bool(event.control.value)
+
+            overlay_switch.disabled = True
+            self.page.update()
+
+            message: str | None = None
+
+            try:
+                if requested:
+                    success = await accessibility.show_overlay()
+                else:
+                    success = await accessibility.hide_overlay()
+
+                if not success:
+                    message = "Unable to change overlay state"
+
+            except Exception as exc:
+                message = f"Overlay error: {exc}"
+
+            await refresh()
+
+            if message is not None:
+                overlay_status.value = message
+                self.page.update()
+
+        def change_speed(event: ft.Event[ft.Slider]) -> None:
+            value = event.control.value
+
+            if value is None:
+                return
+
+            self.settings.set_speed(float(value))
+            update_settings_display()
+            self.page.update()
+
+        async def save_speed(event: ft.Event[ft.Slider]) -> None:
+            value = event.control.value
+
+            if value is None:
+                return
+
+            self.settings.set_speed(float(value))
+
+            try:
+                success = await accessibility.set_config(
+                    self.settings.direction, self.settings.speed
+                )
+
+                if not success:
+                    overlay_status.value = "Unable to save speed"
+            except Exception as exc:
+                overlay_status.value = f"Settings error: {exc}"
+
+            await refresh()
+
+        async def select_direction(direction: Direction) -> None:
+            self.settings.set_direction(direction)
+            update_settings_display()
+            self.page.update()
+
+            try:
+                success = await accessibility.set_config(
+                    self.settings.direction,
+                    self.settings.speed,
+                )
+
+                if not success:
+                    overlay_status.value = "Unable to save direction"
+            except Exception as exc:
+                overlay_status.value = f"Settings error: {exc}"
+
+            await refresh()
+
+        async def select_up() -> None:
+            await select_direction("up")
+
+        async def select_down() -> None:
+            await select_direction("down")
+
+        overlay_switch.on_change = toggle_overlay
+        speed_slider.on_change = change_speed
+        speed_slider.on_change_end = save_speed
+
+        up_button.on_click = select_up
+        down_button.on_click = select_down
+
+        update_direction_buttons()
 
         content = self._column(
             self._header(),
-            self._overlay_card(accessibility),
-            permissions_card,
-            self._controls_card(),
+            self._card(
+                self._row(
+                    self._column(
+                        self._section_title("Floating controls"),
+                        ft.Text("Show controls over other apps", color=MUTED, size=12),
+                        spacing=4,
+                        expand=True,
+                    ),
+                    overlay_switch,
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                ),
+                overlay_status,
+                ft.Button(
+                    content="Refresh status",
+                    icon=ft.Icons.REFRESH,
+                    on_click=refresh,
+                ),
+            ),
+            self._card(
+                self._row(
+                    self._section_title("Accessibility"),
+                    access_status,
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                ),
+                self._row(
+                    ft.Button(
+                        content="Check access",
+                        icon=ft.Icons.REFRESH,
+                        expand=True,
+                        on_click=refresh,
+                    ),
+                    ft.Button(
+                        content="Settings",
+                        icon=ft.Icons.ACCESSIBILITY_NEW,
+                        expand=True,
+                        on_click=enable_access,
+                    ),
+                ),
+            ),
+            self._card(
+                self._row(
+                    self._section_title("Scrolling"),
+                    direction_summary,
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                ),
+                self._row(
+                    ft.Text("Speed", color=INK, size=14),
+                    speed_value,
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                ),
+                speed_slider,
+                self._row(
+                    ft.Text("0.5×  Slower", color=MUTED, size=11),
+                    ft.Text("5×  Faster", color=MUTED, size=11),
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                ),
+                ft.Text("Direction", color=INK, size=14),
+                self._row(up_button, down_button),
+            ),
             spacing=18,
             expand=True,
             scroll=ft.ScrollMode.AUTO,
         )
 
-        async def on_lifecycle(
-            event: ft.AppLifecycleStateChangeEvent,
-        ) -> None:
+        async def on_lifecycle(event: ft.AppLifecycleStateChangeEvent) -> None:
             if event.state == ft.AppLifecycleState.RESUME:
-                await check_access()
+                await refresh()
 
         self.page.on_app_lifecycle_state_change = on_lifecycle
 
@@ -48,7 +291,7 @@ class AutoScrollApp:
             )
         )
 
-        self.page.run_task(check_access)
+        self.page.run_task(refresh)
 
     def _header(self) -> ft.Row:
         return self._row(
@@ -67,205 +310,6 @@ class AutoScrollApp:
                 expand=True,
             ),
             spacing=14,
-        )
-
-    def _overlay_card(self, accessibility: AndroidAccessibility) -> ft.Container:
-        status = ft.Text("Overlay hidden", color=MUTED, size=12)
-
-        overlay_switch = ft.Switch(value=False)
-
-        async def refresh() -> None:
-            try:
-                visible = await accessibility.is_overlay_visible()
-                overlay_switch.value = visible
-                status.value = "Overlay active" if visible else "Overlay hidden"
-            except Exception as exc:
-                overlay_switch.value = False
-                status.value = f"Overlay error: {exc}"
-
-            overlay_switch.update()
-            status.update()
-
-        async def toggle(event: ft.Event[ft.Switch]) -> None:
-            requested = bool(event.control.value)
-            overlay_switch.disabled = True
-            overlay_switch.update()
-
-            message: str | None = None
-
-            try:
-                if requested:
-                    if not await accessibility.is_enabled():
-                        message = "Enable Accessibility first"
-                    elif not await accessibility.has_overlay_permission():
-                        await accessibility.request_overlay_permission()
-                        message = "Allow display over other apps in Settings"
-                    elif not await accessibility.show_overlay():
-                        message = "Unable to show overlay"
-                else:
-                    await accessibility.hide_overlay()
-
-            except Exception as exc:
-                message = f"Overlay error: {exc}"
-
-            finally:
-                overlay_switch.disabled = False
-                await refresh()
-
-                if message is not None:
-                    status.value = message
-                    status.update()
-
-        overlay_switch.on_change = toggle
-
-        return self._card(
-            self._row(
-                self._column(
-                    ft.Text("Floating controls", color=INK, size=17, weight=ft.FontWeight.W_600),
-                    ft.Text("Show controls over other apps", color=MUTED, size=12),
-                    spacing=4,
-                    expand=True,
-                ),
-                overlay_switch,
-                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-            ),
-            status,
-            ft.Button(content="Refresh status", icon=ft.Icons.REFRESH, on_click=refresh),
-        )
-
-    def _permissions_card(
-        self, accessibility: AndroidAccessibility
-    ) -> tuple[ft.Container, Callable[[], Awaitable[None]]]:
-        status = ft.Text("Checking accessibility...", color=MUTED, size=13)
-
-        async def check_access() -> None:
-            try:
-                enabled = await accessibility.is_enabled()
-
-                status.value = "Accessibility enabled" if enabled else "Accessibility disabled"
-                status.color = TEAL if enabled else MUTED
-
-            except Exception as exc:
-                status.value = f"Accessibility unavailable: {exc}"
-                status.color = MUTED
-
-            status.update()
-
-        async def request_access() -> None:
-            try:
-                if await accessibility.is_enabled():
-                    await check_access()
-                    return
-
-                await accessibility.request_permission()
-                status.value = "Enable Auto Scroll in Android Settings"
-                status.color = MUTED
-                status.update()
-
-            except Exception as exc:
-                status.value = f"Unable to open settings: {exc}"
-                status.update()
-
-        card = self._card(
-            self._row(
-                self._section_title("Accessibility"),
-                status,
-                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-            ),
-            self._row(
-                ft.Button(
-                    content="Check access",
-                    icon=ft.Icons.REFRESH,
-                    expand=True,
-                    on_click=check_access,
-                ),
-                ft.Button(
-                    content="Enable",
-                    icon=ft.Icons.ACCESSIBILITY_NEW,
-                    expand=True,
-                    on_click=request_access,
-                ),
-                spacing=10,
-            ),
-        )
-
-        return card, check_access
-
-    def _controls_card(self) -> ft.Container:
-        speed_text = ft.Text(
-            f"{self.settings.speed:g}x", size=20, weight=ft.FontWeight.BOLD, color=INK
-        )
-
-        summary_text = ft.Text(self.settings.description, size=13, color=MUTED)
-        up_button = ft.Button(content="Up", icon=ft.Icons.ARROW_UPWARD, expand=True)
-        down_button = ft.Button(content="Down", icon=ft.Icons.ARROW_DOWNWARD, expand=True)
-
-        def sync_direction_buttons() -> None:
-            for direction, button in (
-                ("up", up_button),
-                ("down", down_button),
-            ):
-                selected = direction == self.settings.direction
-                button.bgcolor = TEAL if selected else PALE
-                button.color = CARD if selected else INK
-                button.icon_color = CARD if selected else TEAL
-
-        def change_direction(direction: Direction) -> None:
-            self.settings.set_direction(direction)
-            sync_direction_buttons()
-
-            summary_text.value = self.settings.description
-
-            up_button.update()
-            down_button.update()
-            summary_text.update()
-
-        def change_speed(event: ft.Event[ft.Slider]) -> None:
-            value = event.control.value
-            if value is None:
-                return
-
-            self.settings.set_speed(float(value))
-
-            speed_text.value = f"{self.settings.speed:g}x"
-            summary_text.value = self.settings.description
-
-            speed_text.update()
-            summary_text.update()
-
-        up_button.on_click = lambda _: change_direction("up")
-        down_button.on_click = lambda _: change_direction("down")
-
-        sync_direction_buttons()
-
-        return self._card(
-            self._row(
-                self._section_title("Default scrolling"),
-                summary_text,
-                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-            ),
-            self._row(
-                ft.Text("Speed", color=INK, size=14),
-                speed_text,
-                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-            ),
-            ft.Slider(
-                min=0.5,
-                max=5.0,
-                divisions=9,
-                value=self.settings.speed,
-                active_color=TEAL,
-                label="{value}x",
-                round=1,
-                on_change=change_speed,
-            ),
-            self._row(
-                ft.Text("0.5x  Slower", color=MUTED, size=11),
-                ft.Text("5x  Faster", color=MUTED, size=11),
-                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-            ),
-            ft.Text("Direction", color=INK, size=14),
-            self._row(up_button, down_button),
         )
 
     @staticmethod

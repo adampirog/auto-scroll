@@ -1,13 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <uses-permission
-        android:name="android.permission.SYSTEM_ALERT_WINDOW" />
-
     <application>
         <service
             android:name="com.adampirog.auto_scroll_android.AutoScrollAccessibilityService"
             android:label="Auto Scroll"
+            android:process=":accessibility"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
             android:exported="true">
 
