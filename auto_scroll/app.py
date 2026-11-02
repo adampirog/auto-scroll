@@ -1,3 +1,5 @@
+from collections.abc import Awaitable, Callable
+
 import flet as ft
 from auto_scroll_android import AndroidAccessibility
 
@@ -11,25 +13,33 @@ class AutoScrollApp:
         self.settings = settings if settings is not None else ScrollSettings()
 
     def mount(self) -> None:
-        """Build and mount the main application screen."""
-        accessibility = AndroidAccessibility()
-
         self.page.title = "Auto Scroll"
         self.page.bgcolor = CANVAS
         self.page.theme_mode = ft.ThemeMode.LIGHT
         self.page.padding = 0
         self.page.theme = ft.Theme(color_scheme_seed=TEAL)
 
+        accessibility = AndroidAccessibility()
+
+        permissions_card, check_access = self._permissions_card(accessibility)
+
         content = self._column(
             self._header(),
             self._overlay_card(accessibility),
-            self._permissions_card(accessibility),
+            permissions_card,
             self._controls_card(),
-            self._help_text(),
             spacing=18,
             expand=True,
             scroll=ft.ScrollMode.AUTO,
         )
+
+        async def on_lifecycle(
+            event: ft.AppLifecycleStateChangeEvent,
+        ) -> None:
+            if event.state == ft.AppLifecycleState.RESUME:
+                await check_access()
+
+        self.page.on_app_lifecycle_state_change = on_lifecycle
 
         self.page.add(
             ft.SafeArea(
@@ -37,6 +47,8 @@ class AutoScrollApp:
                 content=ft.Container(expand=True, padding=20, content=content),
             )
         )
+
+        self.page.run_task(check_access)
 
     def _header(self) -> ft.Row:
         return self._row(
@@ -58,46 +70,51 @@ class AutoScrollApp:
         )
 
     def _overlay_card(self, accessibility: AndroidAccessibility) -> ft.Container:
-        status = ft.Text("Floating controls are disabled", color=MUTED, size=12)
+        status = ft.Text("Overlay hidden", color=MUTED, size=12)
 
         overlay_switch = ft.Switch(value=False)
 
         async def refresh() -> None:
-            visible = await accessibility.is_overlay_visible()
-            overlay_switch.value = visible
-            status.value = (
-                "Floating controls are active" if visible else "Floating controls are disabled"
-            )
+            try:
+                visible = await accessibility.is_overlay_visible()
+                overlay_switch.value = visible
+                status.value = "Overlay active" if visible else "Overlay hidden"
+            except Exception as exc:
+                overlay_switch.value = False
+                status.value = f"Overlay error: {exc}"
+
             overlay_switch.update()
             status.update()
 
         async def toggle(event: ft.Event[ft.Switch]) -> None:
+            requested = bool(event.control.value)
             overlay_switch.disabled = True
             overlay_switch.update()
 
-            try:
-                if event.control.value:
-                    if not await accessibility.is_enabled():
-                        status.value = "Enable Accessibility first"
+            message: str | None = None
 
+            try:
+                if requested:
+                    if not await accessibility.is_enabled():
+                        message = "Enable Accessibility first"
                     elif not await accessibility.has_overlay_permission():
                         await accessibility.request_overlay_permission()
-                        status.value = (
-                            "Grant Display over other apps, then return and enable the overlay"
-                        )
-
+                        message = "Allow display over other apps in Settings"
                     elif not await accessibility.show_overlay():
-                        status.value = "Unable to show floating controls"
-
+                        message = "Unable to show overlay"
                 else:
                     await accessibility.hide_overlay()
 
             except Exception as exc:
-                status.value = f"Overlay error: {exc}"
+                message = f"Overlay error: {exc}"
 
             finally:
                 overlay_switch.disabled = False
                 await refresh()
+
+                if message is not None:
+                    status.value = message
+                    status.update()
 
         overlay_switch.on_change = toggle
 
@@ -113,62 +130,48 @@ class AutoScrollApp:
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
             ),
             status,
-            ft.Button(
-                content="Refresh status", icon=ft.Icons.REFRESH, on_click=lambda _: refresh()
-            ),
+            ft.Button(content="Refresh status", icon=ft.Icons.REFRESH, on_click=refresh),
         )
 
-    def _permissions_card(self, accessibility: AndroidAccessibility) -> ft.Container:
-        status = ft.Text("Accessibility status not checked yet", color=MUTED, size=13)
+    def _permissions_card(
+        self, accessibility: AndroidAccessibility
+    ) -> tuple[ft.Container, Callable[[], Awaitable[None]]]:
+        status = ft.Text("Checking accessibility...", color=MUTED, size=13)
 
         async def check_access() -> None:
             try:
                 enabled = await accessibility.is_enabled()
+
                 status.value = "Accessibility enabled" if enabled else "Accessibility disabled"
+                status.color = TEAL if enabled else MUTED
+
             except Exception as exc:
-                status.value = f"Unable to check accessibility: {exc}"
+                status.value = f"Accessibility unavailable: {exc}"
+                status.color = MUTED
 
             status.update()
 
         async def request_access() -> None:
             try:
-                await accessibility.request_permission()
-            except Exception as exc:
-                status.value = f"Permission request failed: {exc}"
-                status.update()
-                return
-
-            await check_access()
-
-        async def test_swipe() -> None:
-            try:
-                if not await accessibility.is_enabled():
-                    status.value = "Enable accessibility first"
-                    status.update()
+                if await accessibility.is_enabled():
+                    await check_access()
                     return
 
-                status.value = "Swipe scheduled in 5 seconds. Switch to your document now."
+                await accessibility.request_permission()
+                status.value = "Enable Auto Scroll in Android Settings"
+                status.color = MUTED
                 status.update()
 
-                completed = await accessibility.test_swipe(delay_ms=5000)
-
-                status.value = (
-                    "Gesture completed" if completed else "Gesture failed or was cancelled"
-                )
-
             except Exception as exc:
-                status.value = f"Gesture error: {exc}"
+                status.value = f"Unable to open settings: {exc}"
+                status.update()
 
-            status.update()
-
-        return self._card(
-            self._section_title("Android accessibility"),
-            ft.Text(
-                "Allow Auto Scroll to perform scrolling gestures in other applications.",
-                color=MUTED,
-                size=12,
+        card = self._card(
+            self._row(
+                self._section_title("Accessibility"),
+                status,
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
             ),
-            status,
             self._row(
                 ft.Button(
                     content="Check access",
@@ -182,35 +185,26 @@ class AutoScrollApp:
                     expand=True,
                     on_click=request_access,
                 ),
+                spacing=10,
             ),
-            ft.Button(content="Test swipe (5s delay)", icon=ft.Icons.SWIPE_UP, on_click=test_swipe),
         )
 
-    def _permission_row(self, icon: ft.IconData, title: str, description: str) -> ft.Row:
-        return self._row(
-            ft.Icon(icon, color=TEAL, size=24),
-            self._column(
-                ft.Text(title, color=INK, size=13, weight=ft.FontWeight.W_600),
-                ft.Text(description, color=MUTED, size=11),
-                spacing=2,
-                expand=True,
-            ),
-            ft.Text("Planned", color=MUTED, size=11),
-            spacing=12,
-        )
+        return card, check_access
 
     def _controls_card(self) -> ft.Container:
-        """Build scrolling controls and their local event handlers."""
         speed_text = ft.Text(
             f"{self.settings.speed:g}x", size=20, weight=ft.FontWeight.BOLD, color=INK
         )
-        summary_text = ft.Text(self.settings.description, size=13, color=MUTED)
 
+        summary_text = ft.Text(self.settings.description, size=13, color=MUTED)
         up_button = ft.Button(content="Up", icon=ft.Icons.ARROW_UPWARD, expand=True)
         down_button = ft.Button(content="Down", icon=ft.Icons.ARROW_DOWNWARD, expand=True)
 
         def sync_direction_buttons() -> None:
-            for direction, button in (("up", up_button), ("down", down_button)):
+            for direction, button in (
+                ("up", up_button),
+                ("down", down_button),
+            ):
                 selected = direction == self.settings.direction
                 button.bgcolor = TEAL if selected else PALE
                 button.color = CARD if selected else INK
@@ -272,24 +266,11 @@ class AutoScrollApp:
             ),
             ft.Text("Direction", color=INK, size=14),
             self._row(up_button, down_button),
-            ft.Text(
-                "These values are currently kept in memory for this session.", color=MUTED, size=11
-            ),
         )
 
     @staticmethod
     def _section_title(title: str) -> ft.Text:
         return ft.Text(title, color=INK, size=16, weight=ft.FontWeight.W_600)
-
-    @staticmethod
-    def _help_text() -> ft.Text:
-        return ft.Text(
-            "V1 target: scroll webpages and documents in other Android apps. "
-            "This build is the Flet UI foundation only.",
-            color=MUTED,
-            size=12,
-            text_align=ft.TextAlign.CENTER,
-        )
 
     @staticmethod
     def _row(

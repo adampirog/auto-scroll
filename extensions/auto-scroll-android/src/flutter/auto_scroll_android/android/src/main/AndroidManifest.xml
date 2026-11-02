@@ -6,13 +6,14 @@
 
     <application>
         <service
-            android:name="slayer.accessibility.service.flutter_accessibility_service.AccessibilityListener"
+            android:name="com.adampirog.auto_scroll_android.AutoScrollAccessibilityService"
             android:label="Auto Scroll"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
             android:exported="true">
 
             <intent-filter>
-                <action android:name="android.accessibilityservice.AccessibilityService" />
+                <action
+                    android:name="android.accessibilityservice.AccessibilityService" />
             </intent-filter>
 
             <meta-data

@@ -1,12 +1,9 @@
-import 'dart:ui';
+import 'dart:async';
 
 import 'package:flet/flet.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_accessibility_service/flutter_accessibility_service.dart';
-import 'package:flutter_accessibility_service/gesture_description.dart';
 
 
-/// Registers our Android integration with Flet.
 class Extension extends FletExtension {
   @override
   FletService? createService(Control control) {
@@ -18,179 +15,214 @@ class Extension extends FletExtension {
 }
 
 
-/// Provides accessibility gestures and native overlay management.
 class AndroidAccessibilityService extends FletService {
   AndroidAccessibilityService({required super.control});
 
-  static const MethodChannel _overlayChannel = MethodChannel(
+  static const MethodChannel _nativeChannel = MethodChannel(
     'auto_scroll_android/overlay',
   );
+
+  bool _running = false;
+  int _generation = 0;
+  double _speed = 1.0;
+  String _direction = 'down';
+  Future<void>? _scrollTask;
 
   @override
   void init() {
     super.init();
     control.addInvokeMethodListener(_invokeMethod);
-    _overlayChannel.setMethodCallHandler(_handleOverlayAction);
+    _nativeChannel.setMethodCallHandler(_handleNativeAction);
   }
 
-  Future<dynamic> _invokeMethod(
-    String name,
-    dynamic args,
-  ) async {
+  Future<dynamic> _invokeMethod(String name, dynamic args) async {
     switch (name) {
-      // Accessibility — M0.2
-      case "is_enabled":
-        return await FlutterAccessibilityService
-            .isAccessibilityPermissionEnabled();
+      case 'is_enabled':
+        return await _nativeChannel.invokeMethod<bool>(
+              'is_enabled',
+            ) ??
+            false;
 
-      case "request_permission":
-        return await FlutterAccessibilityService
-            .requestAccessibilityPermission();
+      case 'request_permission':
+        return await _nativeChannel.invokeMethod<bool>(
+              'request_permission',
+            ) ??
+            false;
 
-      case "test_swipe":
-        final delayMs = (args["delay_ms"] as num).toInt();
+      case 'overlay_permission_granted':
+        return await _nativeChannel.invokeMethod<bool>(
+              'overlay_permission_granted',
+            ) ??
+            false;
 
-        if (delayMs < 0 || delayMs > 15000) {
-          throw ArgumentError("Invalid swipe delay");
+      case 'request_overlay_permission':
+        return await _nativeChannel.invokeMethod<bool>(
+              'request_overlay_permission',
+            ) ??
+            false;
+
+      case 'show_overlay':
+        return await _nativeChannel.invokeMethod<bool>(
+              'show_overlay',
+            ) ??
+            false;
+
+      case 'hide_overlay':
+        _stopScrolling();
+        return await _nativeChannel.invokeMethod<bool>(
+              'hide_overlay',
+            ) ??
+            false;
+
+      case 'is_overlay_visible':
+        return await _nativeChannel.invokeMethod<bool>(
+              'is_overlay_visible',
+            ) ??
+            false;
+
+      default:
+        throw UnsupportedError(
+          'Unknown Android method: $name',
+        );
+    }
+  }
+
+  Future<dynamic> _handleNativeAction(MethodCall call) async {
+    switch (call.method) {
+      case 'scroll_start':
+        _updateConfig(call.arguments);
+        return await _startScrolling();
+
+      case 'scroll_stop':
+        _stopScrolling();
+        return true;
+
+      case 'scroll_config':
+        _updateConfig(call.arguments);
+        return true;
+
+      default:
+        throw UnsupportedError(
+          'Unknown native action: ${call.method}',
+        );
+    }
+  }
+
+  void _updateConfig(dynamic arguments) {
+    final data = Map<String, dynamic>.from(
+      arguments as Map,
+    );
+
+    final direction = data['direction'] as String;
+    final speed = (data['speed'] as num).toDouble();
+
+    if (direction != 'up' && direction != 'down') {
+      throw ArgumentError('Invalid scrolling direction');
+    }
+
+    if (!speed.isFinite || speed < 0.5 || speed > 5.0) {
+      throw ArgumentError('Invalid scrolling speed');
+    }
+
+    _direction = direction;
+    _speed = speed;
+  }
+
+  Future<bool> _startScrolling() async {
+    if (_running) {
+      return true;
+    }
+
+    final generation = ++_generation;
+
+    final enabled = await _nativeChannel.invokeMethod<bool>(
+          'is_enabled',
+        ) ??
+        false;
+
+    if (!enabled || generation != _generation) {
+      return false;
+    }
+
+    _running = true;
+
+    final previousTask = _scrollTask;
+
+    if (previousTask != null) {
+      await previousTask;
+    }
+
+    if (!_running || generation != _generation) {
+      return false;
+    }
+
+    _scrollTask = _scrollLoop(generation);
+    return true;
+  }
+
+  void _stopScrolling() {
+    _running = false;
+    _generation++;
+  }
+
+  Future<void> _scrollLoop(int generation) async {
+    var failed = false;
+
+    try {
+      while (_running && generation == _generation) {
+        final completed = await _nativeChannel.invokeMethod<bool>(
+              'dispatch_swipe',
+              {
+                'direction': _direction,
+                'speed': _speed,
+              },
+            ) ??
+            false;
+
+        if (!_running || generation != _generation) {
+          break;
         }
 
-        if (!await FlutterAccessibilityService
-            .isAccessibilityPermissionEnabled()) {
-          return false;
+        if (!completed) {
+          failed = true;
+          break;
         }
+
+        final delayMs = (170 / _speed)
+            .round()
+            .clamp(40, 340)
+            .toInt();
 
         await Future<void>.delayed(
           Duration(milliseconds: delayMs),
         );
+      }
+    } catch (_) {
+      failed = true;
+    } finally {
+      if (generation == _generation) {
+        _running = false;
+        _scrollTask = null;
 
-        if (!await FlutterAccessibilityService
-            .isAccessibilityPermissionEnabled()) {
-          return false;
+        if (failed) {
+          try {
+            await _nativeChannel.invokeMethod<bool>(
+              'scroll_finished',
+            );
+          } catch (_) {
+            // The floating window might already be closed.
+          }
         }
-
-        return await _swipe(direction: "down", speed: 1.0);
-
-      // Floating overlay — M0.3
-      case "overlay_permission_granted":
-        return await _overlayChannel.invokeMethod<bool>(
-              "overlay_permission_granted",
-            ) ??
-            false;
-
-      case "request_overlay_permission":
-        return await _overlayChannel.invokeMethod<bool>(
-              "request_overlay_permission",
-            ) ??
-            false;
-
-      case "show_overlay":
-        return await _overlayChannel.invokeMethod<bool>(
-              "show_overlay",
-            ) ??
-            false;
-
-      case "hide_overlay":
-        return await _overlayChannel.invokeMethod<bool>(
-              "hide_overlay",
-            ) ??
-            false;
-
-      case "is_overlay_visible":
-        return await _overlayChannel.invokeMethod<bool>(
-              "is_overlay_visible",
-            ) ??
-            false;
-
-      default:
-        throw UnsupportedError(
-          "Unknown accessibility method: $name",
-        );
+      }
     }
-  }
-
-  Future<dynamic> _handleOverlayAction(MethodCall call) async {
-    switch (call.method) {
-      case "overlay_swipe":
-        final data = Map<String, dynamic>.from(
-          call.arguments as Map,
-        );
-
-        final direction = data["direction"] as String;
-        final speed = (data["speed"] as num).toDouble();
-
-        if (direction != "up" && direction != "down") {
-          return false;
-        }
-
-        if (speed < 0.5 || speed > 3.0) {
-          return false;
-        }
-
-        if (!await FlutterAccessibilityService
-            .isAccessibilityPermissionEnabled()) {
-          return false;
-        }
-
-        return await _swipe(
-          direction: direction,
-          speed: speed,
-        );
-
-      default:
-        throw UnsupportedError(
-          "Unknown overlay action: ${call.method}",
-        );
-    }
-  }
-
-  Future<bool> _swipe({
-    required String direction,
-    required double speed,
-  }) async {
-    final views = PlatformDispatcher.instance.views;
-
-    if (views.isEmpty) {
-      return false;
-    }
-
-    final size = views.first.physicalSize;
-
-    if (size.isEmpty) {
-      return false;
-    }
-
-    final x = size.width * 0.5;
-
-    final top = size.height * 0.30;
-    final bottom = size.height * 0.75;
-
-    // Finger movement is opposite to document movement.
-    final startY = direction == "down" ? bottom : top;
-    final endY = direction == "down" ? top : bottom;
-
-    final durationMs = (400 / speed).round();
-
-    final gesture = GestureDescription(
-      strokes: [
-        GestureStroke(
-          path: [
-            GesturePoint(x, startY),
-            GesturePoint(x, endY),
-          ],
-          startTime: 0,
-          duration: durationMs,
-        ),
-      ],
-    );
-
-    return await FlutterAccessibilityService
-        .dispatchGesture(gesture);
   }
 
   @override
   void dispose() {
+    _stopScrolling();
     control.removeInvokeMethodListener(_invokeMethod);
-    _overlayChannel.setMethodCallHandler(null);
+    _nativeChannel.setMethodCallHandler(null);
     super.dispose();
   }
 }
+
