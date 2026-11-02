@@ -18,4 +18,4 @@ flutter:
     platforms:
       android:
         package: com.adampirog.auto_scroll_android
-        dartPluginClass: AutoScrollAndroidPlugin
+        pluginClass: AutoScrollAndroidPlugin
