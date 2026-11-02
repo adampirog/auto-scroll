@@ -1,4 +1,5 @@
 import flet as ft
+from auto_scroll_android import AndroidAccessibility
 
 from auto_scroll.settings import Direction, ScrollSettings
 from auto_scroll.theme import CANVAS, CARD, INK, MUTED, PALE, TEAL
@@ -11,6 +12,8 @@ class AutoScrollApp:
 
     def mount(self) -> None:
         """Build and mount the main application screen."""
+        accessibility = AndroidAccessibility()
+
         self.page.title = "Auto Scroll"
         self.page.bgcolor = CANVAS
         self.page.theme_mode = ft.ThemeMode.LIGHT
@@ -20,7 +23,7 @@ class AutoScrollApp:
         content = self._column(
             self._header(),
             self._overlay_card(),
-            self._permissions_card(),
+            self._permissions_card(accessibility),
             self._controls_card(),
             self._help_text(),
             spacing=18,
@@ -80,23 +83,72 @@ class AutoScrollApp:
             ),
         )
 
-    def _permissions_card(self) -> ft.Container:
+    def _permissions_card(self, accessibility: AndroidAccessibility) -> ft.Container:
+        status = ft.Text("Accessibility status not checked yet", color=MUTED, size=13)
+
+        async def check_access() -> None:
+            try:
+                enabled = await accessibility.is_enabled()
+                status.value = "Accessibility enabled" if enabled else "Accessibility disabled"
+            except Exception as exc:
+                status.value = f"Unable to check accessibility: {exc}"
+
+            status.update()
+
+        async def request_access() -> None:
+            try:
+                await accessibility.request_permission()
+            except Exception as exc:
+                status.value = f"Permission request failed: {exc}"
+                status.update()
+                return
+
+            await check_access()
+
+        async def test_swipe() -> None:
+            try:
+                if not await accessibility.is_enabled():
+                    status.value = "Enable accessibility first"
+                    status.update()
+                    return
+
+                status.value = "Swipe scheduled in 5 seconds. Switch to your document now."
+                status.update()
+
+                completed = await accessibility.test_swipe(delay_ms=5000)
+
+                status.value = (
+                    "Gesture completed" if completed else "Gesture failed or was cancelled"
+                )
+
+            except Exception as exc:
+                status.value = f"Gesture error: {exc}"
+
+            status.update()
+
         return self._card(
-            self._section_title("Android integration"),
-            self._permission_row(
-                ft.Icons.ACCESSIBILITY_NEW,
-                "Accessibility service",
-                "Required to scroll in other apps",
-            ),
-            ft.Divider(height=1, color=CANVAS),
-            self._permission_row(
-                ft.Icons.LAYERS_OUTLINED,
-                "Floating controls",
-                "Will be provided by the Android service",
-            ),
+            self._section_title("Android accessibility"),
             ft.Text(
-                "These are planned capabilities, not live permission checks.", color=MUTED, size=11
+                "Allow Auto Scroll to perform scrolling gestures in other applications.",
+                color=MUTED,
+                size=12,
             ),
+            status,
+            self._row(
+                ft.Button(
+                    content="Check access",
+                    icon=ft.Icons.REFRESH,
+                    expand=True,
+                    on_click=check_access,
+                ),
+                ft.Button(
+                    content="Enable",
+                    icon=ft.Icons.ACCESSIBILITY_NEW,
+                    expand=True,
+                    on_click=request_access,
+                ),
+            ),
+            ft.Button(content="Test swipe (5s delay)", icon=ft.Icons.SWIPE_UP, on_click=test_swipe),
         )
 
     def _permission_row(self, icon: ft.IconData, title: str, description: str) -> ft.Row:

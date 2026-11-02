@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="auto_scroll_accessibility_description">
+        Performs user-requested scrolling gestures in other applications.
+        Does not read document contents.
+    </string>
+</resources>
+

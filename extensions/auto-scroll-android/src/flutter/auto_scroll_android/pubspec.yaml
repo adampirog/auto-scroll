@@ -1,0 +1,21 @@
+name: auto_scroll_android
+description: Android integration for AutoScroll
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ">=3.2.3 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  flet: ^1.0.5
+  flutter_accessibility_service: 1.2.0
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: com.adampirog.auto_scroll_android
+        dartPluginClass: AutoScrollAndroidPlugin
