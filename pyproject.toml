@@ -77,3 +77,10 @@ build_number = 1
 path = "."
 module = "main"
 exclude=["tests"]
+
+[tool.flet.android]
+adaptive_icon_background = "#F8FAF8"
+
+[tool.flet.android.signing]
+key_store = "/home/apirog/.local/share/android-signing/personal-apps.p12"
+key_alias = "personal-apps"
