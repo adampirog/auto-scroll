@@ -22,7 +22,7 @@ class AutoScrollApp:
 
         content = self._column(
             self._header(),
-            self._overlay_card(),
+            self._overlay_card(accessibility),
             self._permissions_card(accessibility),
             self._controls_card(),
             self._help_text(),
@@ -57,7 +57,50 @@ class AutoScrollApp:
             spacing=14,
         )
 
-    def _overlay_card(self) -> ft.Container:
+    def _overlay_card(self, accessibility: AndroidAccessibility) -> ft.Container:
+        status = ft.Text("Floating controls are disabled", color=MUTED, size=12)
+
+        overlay_switch = ft.Switch(value=False)
+
+        async def refresh() -> None:
+            visible = await accessibility.is_overlay_visible()
+            overlay_switch.value = visible
+            status.value = (
+                "Floating controls are active" if visible else "Floating controls are disabled"
+            )
+            overlay_switch.update()
+            status.update()
+
+        async def toggle(event: ft.Event[ft.Switch]) -> None:
+            overlay_switch.disabled = True
+            overlay_switch.update()
+
+            try:
+                if event.control.value:
+                    if not await accessibility.is_enabled():
+                        status.value = "Enable Accessibility first"
+
+                    elif not await accessibility.has_overlay_permission():
+                        await accessibility.request_overlay_permission()
+                        status.value = (
+                            "Grant Display over other apps, then return and enable the overlay"
+                        )
+
+                    elif not await accessibility.show_overlay():
+                        status.value = "Unable to show floating controls"
+
+                else:
+                    await accessibility.hide_overlay()
+
+            except Exception as exc:
+                status.value = f"Overlay error: {exc}"
+
+            finally:
+                overlay_switch.disabled = False
+                await refresh()
+
+        overlay_switch.on_change = toggle
+
         return self._card(
             self._row(
                 self._column(
@@ -66,20 +109,12 @@ class AutoScrollApp:
                     spacing=4,
                     expand=True,
                 ),
-                ft.Switch(value=False, disabled=True),
+                overlay_switch,
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
             ),
-            ft.Container(
-                bgcolor=PALE,
-                padding=12,
-                border_radius=10,
-                content=self._row(
-                    ft.Icon(ft.Icons.INFO_OUTLINE, color=TEAL, size=18),
-                    ft.Text(
-                        "Overlay integration is coming in M0.2.", color=INK, size=12, expand=True
-                    ),
-                    spacing=8,
-                ),
+            status,
+            ft.Button(
+                content="Refresh status", icon=ft.Icons.REFRESH, on_click=lambda _: refresh()
             ),
         )
 

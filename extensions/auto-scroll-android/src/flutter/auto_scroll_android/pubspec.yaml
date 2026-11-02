@@ -12,6 +12,7 @@ dependencies:
 
   flet: ^1.0.5
   flutter_accessibility_service: 1.2.0
+  shared_preferences: ^2.5.3
 
 flutter:
   plugin:
