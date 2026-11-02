@@ -38,7 +38,6 @@ private val releaseRequested =
             )
     }
 
-// Fail immediately if release signing prerequisites are missing.
 if (releaseRequested) {
     check(signingKeystoreFile.isFile) {
         "Release signing failed: keystore not found at $signingKeystorePath"
@@ -54,7 +53,7 @@ if (releaseRequested) {
 }
 
 // -----------------------------------------------------------------------------
-// Android configuration
+// Android
 // -----------------------------------------------------------------------------
 
 android {
@@ -76,32 +75,20 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    // -------------------------------------------------------------------------
-    // Signing configurations
-    // -------------------------------------------------------------------------
-
     signingConfigs {
         create("release") {
             storeFile = signingKeystoreFile
             storeType = "PKCS12"
 
             storePassword = signingStorePassword ?: ""
-
-            // Explicit alias from the original pyproject.toml.
             keyAlias = "personal-apps"
-
             keyPassword = signingKeyPassword ?: ""
         }
     }
 
-    // Validate that Gradle actually registered the expected alias.
     check(signingConfigs.getByName("release").keyAlias == "personal-apps") {
         "Release signing configuration has an incorrect or missing key alias"
     }
-
-    // -------------------------------------------------------------------------
-    // Build types
-    // -------------------------------------------------------------------------
 
     buildTypes {
         getByName("debug") {
@@ -110,8 +97,15 @@ android {
 
         getByName("release") {
             isMinifyEnabled = false
-
             signingConfig = signingConfigs.getByName("release")
         }
     }
+}
+
+// -----------------------------------------------------------------------------
+// Unit tests
+// -----------------------------------------------------------------------------
+
+dependencies {
+    testImplementation("junit:junit:4.13.2")
 }

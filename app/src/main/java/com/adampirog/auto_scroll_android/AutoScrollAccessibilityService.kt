@@ -14,15 +14,12 @@ import android.os.Handler
 import android.os.Looper
 import android.os.ResultReceiver
 import android.view.accessibility.AccessibilityEvent
-import kotlin.math.pow
-import kotlin.math.roundToInt
-import kotlin.math.roundToLong
 
 /**
  * Native accessibility scrolling engine.
  *
- * The service performs user-requested swipe gestures without
- * inspecting accessibility window contents.
+ * Performs user-requested gestures without reading window contents
+ * or running a polling/keep-alive worker.
  */
 class AutoScrollAccessibilityService : AccessibilityService() {
 
@@ -38,8 +35,8 @@ class AutoScrollAccessibilityService : AccessibilityService() {
         const val RESULT_OK = 1
         const val RESULT_FAILED = 0
 
-        const val MIN_SPEED = 1.0
-        const val MAX_SPEED = 25.0
+        const val MIN_SPEED = ScrollRules.MIN_SPEED
+        const val MAX_SPEED = ScrollRules.MAX_SPEED
 
         private const val PREFS = "auto_scroll"
         private const val PREF_VISIBLE = "overlay_visible"
@@ -98,20 +95,12 @@ class AutoScrollAccessibilityService : AccessibilityService() {
                         Double.NaN
                     )
 
-                    if (
-                        newDirection !in listOf("up", "down") ||
-                        !newSpeed.isFinite() ||
-                        newSpeed !in MIN_SPEED..MAX_SPEED
-                    ) {
+                    if (!ScrollRules.isValid(newDirection, newSpeed)) {
                         reply.send(RESULT_FAILED, state())
                         return
                     }
 
-                    setConfiguration(
-                        newDirection!!,
-                        newSpeed
-                    )
-
+                    setConfiguration(newDirection!!, newSpeed)
                     reply.send(RESULT_OK, state())
                 }
 
@@ -136,23 +125,13 @@ class AutoScrollAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
 
-        direction = preferences.getString(
-            PREF_DIRECTION,
-            "down"
-        )?.takeIf {
-            it == "up" || it == "down"
-        } ?: "down"
+        direction = ScrollRules.restoreDirection(
+            preferences.getString(PREF_DIRECTION, "down")
+        )
 
-        speed = preferences.getFloat(
-            PREF_SPEED,
-            1.0f
-        ).toDouble()
-            .roundToInt()
-            .coerceIn(
-                MIN_SPEED.toInt(),
-                MAX_SPEED.toInt()
-            )
-            .toDouble()
+        speed = ScrollRules.normalizeSpeed(
+            preferences.getFloat(PREF_SPEED, 1.0f).toDouble()
+        )
 
         if (!receiverRegistered) {
             val filter = IntentFilter(ACTION_COMMAND)
@@ -243,14 +222,7 @@ class AutoScrollAccessibilityService : AccessibilityService() {
         newSpeed: Double
     ) {
         direction = newDirection
-
-        speed = newSpeed
-            .roundToInt()
-            .coerceIn(
-                MIN_SPEED.toInt(),
-                MAX_SPEED.toInt()
-            )
-            .toDouble()
+        speed = ScrollRules.normalizeSpeed(newSpeed)
 
         preferences.edit()
             .putString(PREF_DIRECTION, direction)
@@ -298,6 +270,7 @@ class AutoScrollAccessibilityService : AccessibilityService() {
         persist: Boolean = true
     ) {
         pauseScrolling()
+
         overlay?.hide()
         overlay = null
 
@@ -323,7 +296,6 @@ class AutoScrollAccessibilityService : AccessibilityService() {
         val token = ++generation
 
         overlay?.sync(direction, speed, playing)
-
         performGesture(token)
     }
 
@@ -341,45 +313,24 @@ class AutoScrollAccessibilityService : AccessibilityService() {
         if (!playing || token != generation) return
 
         val metrics = resources.displayMetrics
-        val width = metrics.widthPixels.toFloat()
-        val height = metrics.heightPixels.toFloat()
+        val width = metrics.widthPixels
+        val height = metrics.heightPixels
 
-        if (width <= 0f || height <= 0f) {
+        if (width <= 0 || height <= 0) {
             pauseScrolling()
             return
         }
 
-        val x = width * 0.5f
-
-        // At 1x, preserve the original swipe geometry.
-        // At higher speeds, increase travel distance.
-        val distanceFraction = (
-            0.17 + 0.015 * (speed - 1.0)
-        ).coerceIn(0.17, 0.53)
-
-        val distance = height * distanceFraction.toFloat()
-
-        val startY = if (direction == "down") {
-            height * 0.70f
-        } else {
-            height * 0.30f
-        }
-
-        val endY = if (direction == "down") {
-            startY - distance
-        } else {
-            startY + distance
-        }
-
-        // Shorter gestures at high speeds.
-        // 1x: 420 ms; 25x: 75 ms.
-        val durationMs = (
-            420.0 / speed.pow(0.75)
-        ).roundToLong().coerceIn(75L, 420L)
+        val swipe = ScrollRules.swipe(
+            widthPx = width,
+            heightPx = height,
+            direction = direction,
+            speed = speed
+        )
 
         val path = Path().apply {
-            moveTo(x, startY)
-            lineTo(x, endY)
+            moveTo(swipe.x, swipe.startY)
+            lineTo(swipe.x, swipe.endY)
         }
 
         val gesture = GestureDescription.Builder()
@@ -387,7 +338,7 @@ class AutoScrollAccessibilityService : AccessibilityService() {
                 GestureDescription.StrokeDescription(
                     path,
                     0L,
-                    durationMs
+                    swipe.durationMs
                 )
             )
             .build()
@@ -402,10 +353,7 @@ class AutoScrollAccessibilityService : AccessibilityService() {
                         return
                     }
 
-                    // 1x: 170 ms; 25x: 10 ms.
-                    val delayMs = (
-                        170.0 / speed
-                    ).roundToLong().coerceIn(10L, 170L)
+                    val delayMs = ScrollRules.delayMs(speed)
 
                     val task = Runnable {
                         nextGesture = null
@@ -432,3 +380,4 @@ class AutoScrollAccessibilityService : AccessibilityService() {
         }
     }
 }
+
